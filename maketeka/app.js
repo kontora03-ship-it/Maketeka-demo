@@ -1383,31 +1383,48 @@ function layoutModels(models){
  });
 }
 
-let scene=null,sceneAssets=new Map(),sceneFrame;
+let scene=null,sceneAssets=new Map(),sceneFrame,sceneHits=[],sceneDrag=null;
+const sceneInputs=new Map();
+const scenePreview=$('scenePreview');
+const sceneModel=$('sceneModel');
+const sceneAdd=$('sceneAdd');
+
+function populateSceneModels(models){
+ const entries=newest(models).filter(entry=>entry.state.mode!=='photo');
+ sceneModel.replaceChildren(...entries.map(entry=>{
+  const option=document.createElement('option');
+  option.value=entry.id;option.textContent=entry.title;
+  return option;
+ }));
+ sceneModel.disabled=sceneAdd.disabled=!entries.length;
+}
 async function decodeSceneItem(item){
  return new Map(await Promise.all(item.state.layers.map(async layer=>[layer.art,await img(layer.art)])));
 }
 async function openScene(entry){
  const draft=structuredClone(entry);
- const decoded=await Promise.all(draft.items.map(decodeSceneItem));
+ const [decoded,models]=await Promise.all([Promise.all(draft.items.map(decodeSceneItem)),list('models')]);
+ sceneDrag=null;sceneHits=[];
  scene=draft;sceneAssets=new Map(draft.items.map((item,i)=>[item,{images:decoded[i]}]));
  $('sceneForm').elements.title.value=scene.title;
  $('sceneBackground').value=scene.background;
  $('sceneLight').value=scene.light;
  $('sceneTransparent').checked=scene.transparent;
+ $('sceneStatus').textContent='';populateSceneModels(models);
  renderSceneControls();
  $('collectionDialog').close();
  $('sceneDialog').showModal();queueScene();
 }
 function renderSceneControls(){
  const controls=$('sceneItems');
- controls.replaceChildren();
+ controls.replaceChildren();sceneInputs.clear();
  for(const item of scene.items){
   const fieldset=document.createElement('fieldset'),legend=document.createElement('legend');
+  const inputs={};sceneInputs.set(item,inputs);
   legend.textContent=item.title;fieldset.append(legend);
   for(const [key,title,min,max] of [['x','X, %',0,100],['y','Y, %',0,100],['size','Размер, %',1,100],['yaw','Поворот, °',-360,360]]){
    const label=document.createElement('label'),input=document.createElement('input');
-   input.type='number';input.min=min;input.max=max;input.value=Math.round(item[key]);
+   inputs[key]=input;input.type='number';input.min=min;input.max=max;input.value=Math.round(item[key]);
    input.oninput=()=>{
     if(input.value==='')return;
     item[key]=clamp(+input.value,min,max);queueScene();
@@ -1416,16 +1433,41 @@ function renderSceneControls(){
    label.append(title,input);fieldset.append(label);
   }
   const refresh=button('Обновить из модели',async()=>{
+   const draft=scene;
    const entry=(await list('models')).find(model=>model.id===item.sourceId);
    if(!entry)throw Error('Исходная модель недоступна');
    const decoded=await decodeSceneItem(entry);
+   if(scene!==draft||!draft.items.includes(item)||!$('sceneDialog').open)return;
    item.state=entry.state;item.title=entry.title;
    sceneAssets.set(item,{images:decoded});
    renderSceneControls();queueScene();
   });
-  fieldset.append(refresh);controls.append(fieldset);
+  const remove=button('Убрать из сцены',()=>{
+   if(scene.items.length<2)return;
+   scene.items=scene.items.filter(placed=>placed!==item);
+   sceneAssets.delete(item);
+   renderSceneControls();queueScene();
+  });
+  remove.disabled=scene.items.length<2;
+  fieldset.append(refresh,remove);controls.append(fieldset);
  }
 }
+sceneAdd.onclick=()=>task(async()=>{
+ const draft=scene,id=sceneModel.value;
+ sceneAdd.disabled=true;
+ try{
+  const entry=(await list('models')).find(model=>model.id===id);
+  if(!entry)throw Error('Модель недоступна');
+  const decoded=await decodeSceneItem(entry);
+  if(scene!==draft||!$('sceneDialog').open)return;
+  const reference=draft.items[0];
+  const size=clamp(sceneSpan(entry.state)*reference.size/sceneSpan(reference.state),1,42);
+  const item={sourceId:id,title:entry.title,state:entry.state,x:50,y:68,size,yaw:Math.round(entry.state.yaw*180/Math.PI)};
+  draft.items.push(item);sceneAssets.set(item,{images:decoded});
+  renderSceneControls();queueScene();sceneInputs.get(item).x.focus();
+ }finally{if(scene===draft)sceneAdd.disabled=!sceneModel.value}
+});
+
 function scenePixelsPerMm(state,resolution){
  if(state.mode==='model')return resolution/274;
  if(state.mode==='mug')return mugView(resolution,resolution,{zoom:.8,pitch:-.27,yaw:0}).scale;
@@ -1464,34 +1506,79 @@ function sceneTile(item,resolution){
   left=Math.min(left,x);right=Math.max(right,x);top=Math.min(top,y);bottom=Math.max(bottom,y);
  }
  const bounds=[Math.max(0,left-5),Math.max(0,top-5),Math.min(resolution,right+6),Math.min(resolution,bottom+6)];
- return Object.assign(cache,{key,tile,bounds});
+ return Object.assign(cache,{key,tile,bounds,pixels:resolution===420?data:null});
 }
-function paintScene(canvas,transparent,resolution){
+function paintScene(canvas,transparent,resolution,hitAreas){
  const t=canvas.getContext('2d'),{width,height}=canvas;
  t.clearRect(0,0,width,height);
  if(!transparent){t.fillStyle=scene.background;t.fillRect(0,0,width,height)}
  t.imageSmoothingQuality='high';
  for(const item of [...scene.items].sort((a,b)=>a.y-b.y)){
-  const {tile,bounds:[left,top,right,bottom]}=sceneTile(item,resolution);
+  const {tile,pixels,bounds:[left,top,right,bottom]}=sceneTile(item,resolution);
   const w=right-left,h=bottom-top;
   if(w<=0||h<=0)continue;
   const scale=width*item.size/100/sceneSpan(item.state)/scenePixelsPerMm(item.state,resolution);
-  t.drawImage(tile,left,top,w,h,width*item.x/100+(left-resolution/2)*scale,height*item.y/100-h*scale,w*scale,h*scale);
+  const x=width*item.x/100+(left-resolution/2)*scale,y=height*item.y/100-h*scale;
+  t.drawImage(tile,left,top,w,h,x,y,w*scale,h*scale);
+  if(hitAreas)hitAreas.push({item,x,y,w,h,scale,left,top,pixels,resolution});
  }
 }
 function queueScene(){
+ $('sceneStatus').textContent='';
  cancelAnimationFrame(sceneFrame);
  sceneFrame=requestAnimationFrame(()=>{
-  if($('sceneDialog').open)task(()=>paintScene($('scenePreview'),false,420));
+  if(!$('sceneDialog').open)return;
+  sceneHits=[];
+  task(()=>paintScene(scenePreview,scene.transparent,420,sceneHits));
  });
 }
+function scenePoint(event){
+ const rect=scenePreview.getBoundingClientRect();
+ return [(event.clientX-rect.left)*scenePreview.width/rect.width,(event.clientY-rect.top)*scenePreview.height/rect.height];
+}
+function pickSceneItem(x,y){
+ for(let i=sceneHits.length-1;i>=0;i--){
+  const hit=sceneHits[i];
+  const dx=(x-hit.x)/hit.scale,dy=(y-hit.y)/hit.scale;
+  if(dx<0||dy<0||dx>=hit.w||dy>=hit.h)continue;
+  const index=((hit.top+Math.floor(dy))*hit.resolution+hit.left+Math.floor(dx))*4+3;
+  if(hit.pixels[index]>100)return hit.item;
+ }
+ return null;
+}
+scenePreview.onpointerdown=event=>{
+ if(sceneDrag||event.button!==0)return;
+ const [x,y]=scenePoint(event),item=pickSceneItem(x,y);
+ if(!item||!sceneInputs.has(item))return;
+ sceneDrag={item,id:event.pointerId,x,y,startX:item.x,startY:item.y};
+ scenePreview.setPointerCapture(event.pointerId);scenePreview.style.cursor='grabbing';
+};
+scenePreview.onpointermove=event=>{
+ const [x,y]=scenePoint(event);
+ if(!sceneDrag){
+  scenePreview.style.cursor=pickSceneItem(x,y)?'grab':'';
+  return;
+ }
+ if(sceneDrag.id!==event.pointerId)return;
+ const {item,startX,startY}=sceneDrag;
+ item.x=clamp(startX+100*(x-sceneDrag.x)/scenePreview.width,0,100);
+ item.y=clamp(startY+100*(y-sceneDrag.y)/scenePreview.height,0,100);
+ const fields=sceneInputs.get(item);
+ if(fields){fields.x.value=Math.round(item.x);fields.y.value=Math.round(item.y)}
+ queueScene();
+};
+scenePreview.onlostpointercapture=()=>{
+ sceneDrag=null;scenePreview.style.cursor='';
+};
 $('sceneBackground').oninput=e=>{scene.background=e.target.value;queueScene()};
 $('sceneLight').oninput=e=>{scene.light=+e.target.value;queueScene()};
-$('sceneTransparent').onchange=e=>{scene.transparent=e.target.checked};
+$('sceneTransparent').onchange=e=>{scene.transparent=e.target.checked;queueScene()};
 submit('sceneForm',async title=>{
- const entry=structuredClone({...scene,id:scene.id||crypto.randomUUID(),title,updated:Date.now()});
+ const draft=scene;
+ const entry=structuredClone({...draft,id:draft.id||crypto.randomUUID(),title,updated:Date.now()});
  await put('scenes',entry);
- scene.id=entry.id;scene.title=title;message('Сцена сохранена');
+ draft.id=entry.id;draft.title=title;
+ if(scene===draft)$('sceneStatus').textContent='Сцена сохранена';
 });
 $('scenePng').onclick=()=>task(async()=>{
  const canvas=document.createElement('canvas');canvas.width=2400;canvas.height=1600;

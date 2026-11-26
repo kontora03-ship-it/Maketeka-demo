@@ -306,3 +306,9 @@ aside details h3,aside details h4{font:600 .88rem/1.3 'Source Sans 3',Arial,sans
 #sceneItems input {width:70px}
 #sceneForm {display:flex;align-items:end;flex-wrap:wrap;gap:8px}
 @media(max-width:720px) {.desktopLabel {display:none}}
+
+#scenePreview {touch-action:none;background:conic-gradient(#eeece8 25%,#fff 0 50%,#eeece8 0 75%,#fff 0) 0 0/20px 20px}
+.sceneHint {margin:6px 0 10px;color:#525654;font-size:14px}
+.sceneAdd {display:flex;flex-wrap:wrap;gap:8px;align-items:end}
+.sceneAdd label {min-width:0;margin:0}
+.sceneAdd select {max-width:100%}

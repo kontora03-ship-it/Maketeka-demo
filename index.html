@@ -1,4 +1,4 @@
-<!doctype html><html lang="ru"><head><meta name="robots" content="noindex, nofollow, noimageindex"><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#000000"><title>maketeka — студия мокапов</title><link rel="stylesheet" href="/Maketeka-demo/maketeka/ui.css?v=collection1"></head><body>
+<!doctype html><html lang="ru"><head><meta name="robots" content="noindex, nofollow, noimageindex"><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#000000"><title>maketeka — студия мокапов</title><link rel="stylesheet" href="/Maketeka-demo/maketeka/ui.css?v=sceneArrange1"></head><body>
 <header><button id="home" class="brand" aria-label="maketeka — на главную"><img src="/Maketeka-demo/maketeka/assets/brand.svg?v=20261122" alt="maketeka"></button><span class="sep"></span><span id="docname">Студия мокапов</span><div class="headActions"><button id="collection">Мои модели</button><button id="open" aria-label="Открыть проект">Открыть<span class="desktopLabel"> проект</span></button><button id="undo" title="Отменить" aria-label="Отменить" hidden>↶</button><button id="redo" title="Повторить" aria-label="Повторить" hidden>↷</button><button class="dark" id="exports" hidden>Экспорт</button></div></header>
 <main id="welcome">
 <div class="intro"><h1>На что наносим?</h1><p>Разместите свой дизайн на 3D-модели или фотографии.</p></div>
@@ -45,12 +45,15 @@
 <dialog id="sceneDialog" class="sceneDialog">
 <div class="modalHead"><h2>Сцена</h2><button data-close aria-label="Закрыть">×</button></div>
 <canvas id="scenePreview" width="960" height="640" aria-label="Предпросмотр сцены"></canvas>
+<p class="sceneHint">Перетащи изделие на кадре или задай его положение ниже.</p>
+<div class="sceneAdd"><label>Модель из коллекции <select id="sceneModel"></select></label>
+<button type="button" id="sceneAdd">Добавить модель</button></div>
 <div id="sceneItems"></div>
 <form id="sceneForm"><label>Название<input name="title" required maxlength="80"></label>
 <label>Фон <input id="sceneBackground" type="color" value="#eeece8"></label>
 <label>Свет <input id="sceneLight" type="range" min="0" max="100" value="100"></label>
 <label><input id="sceneTransparent" type="checkbox"> Прозрачный PNG</label>
-<button class="dark">Сохранить сцену</button><button type="button" id="scenePng">Скачать PNG</button></form>
+<button class="dark">Сохранить сцену</button><button type="button" id="scenePng">Скачать PNG</button><output id="sceneStatus" aria-live="polite"></output></form>
 </dialog>
 <dialog id="exportDlg"><div class="modalHead"><h2>Экспорт</h2><button data-close aria-label="Закрыть">×</button></div><p id="printSize"></p><label class="materialChoice exportChoice"><input type="checkbox" id="transparentPng">Прозрачный фон PNG</label><button class="dark full" id="png">Скачать PNG · 300 dpi</button><button class="full" id="save">Сохранить проект</button></dialog>
-<input id="photoInput" type="file" hidden accept="image/jpeg,image/png,image/webp"><input id="artInput" type="file" hidden accept="image/svg+xml,image/png,image/jpeg,image/webp" multiple><input id="projectInput" type="file" hidden accept=".maketeka,.json,.zip"><div role="alert" id="message" hidden></div><script type="module" src="/Maketeka-demo/maketeka/app.js?v=collection1"></script></body></html>
+<input id="photoInput" type="file" hidden accept="image/jpeg,image/png,image/webp"><input id="artInput" type="file" hidden accept="image/svg+xml,image/png,image/jpeg,image/webp" multiple><input id="projectInput" type="file" hidden accept=".maketeka,.json,.zip"><div role="alert" id="message" hidden></div><script type="module" src="/Maketeka-demo/maketeka/app.js?v=sceneArrange1"></script></body></html>
