@@ -1,3 +1,4 @@
+import {list,put} from './collection.js';
 import {chooseCrop,cropPixels,dragCrop,exportCrop,validCrop} from './crop.js?v=sceneCrop1';
 import {cartonAllowsGloss,cartonMaterials,cartonPrintFaces,cartonSize,cartonThicknessPresets,freshCarton,isCartonMode,normalizeCarton} from './carton.js?v=magneticCenter1';
 import {merch,drawMerch,merchProjection} from './merch.js?v=cottonTee1';
@@ -14,6 +15,30 @@ const fresh=mode=>({version:1,mode,crop:null,bagFormat:"standard",...(isCartonMo
 let s=fresh('model'),photo,art,bitmap,surface,objectQuad,frameBox,ratio=1,ready=false,editPlane=false,original=false,drag=null,undo=[],redo=[],epoch=0,drawId=0,persistTimer,timer;
 let selected=false, mugCopy=0;
 const projectKey='maketeka-light-project-v1';
+const resumeModelKey='maketeka-resume-model';
+let savedModel=null, modelDirty=false, modelWrite=Promise.resolve();
+function flushModel(){
+ if(!ready||!savedModel||!modelDirty)return modelWrite;
+ modelDirty=false;
+ const entry={...savedModel,state:structuredClone(snapshot()),preview:modelPreview(),updated:Date.now()};
+ modelWrite=modelWrite.catch(()=>{}).then(()=>put('models',entry)).then(()=>{
+  if(savedModel?.id===entry.id)savedModel=entry;
+ }).catch(error=>{
+  if(savedModel?.id===entry.id)modelDirty=true;
+  throw error;
+ });
+ return modelWrite;
+}
+function persistSession(){
+ try{
+  localStorage.setItem(projectKey,JSON.stringify(snapshot()));
+  if(savedModel)localStorage.setItem(resumeModelKey,savedModel.id);
+  else localStorage.removeItem(resumeModelKey);
+  $('resume').hidden=false;
+ }catch{
+  if(!savedModel)message('Для этого проекта используйте «Экспорт → Сохранить проект»');
+ }
+}
 function message(t){$('message').textContent=t;$('message').hidden=false;clearTimeout(timer);timer=setTimeout(()=>$('message').hidden=true,4500)}
 const img=src=>new Promise((resolve,reject)=>{if(!src)return resolve(null);const i=new Image();i.onload=()=>resolve(i);i.onerror=()=>reject(Error('Не удалось прочитать изображение'));i.src=src});
 function readFile(file){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsDataURL(file)})}
@@ -64,8 +89,16 @@ function layerList(){
  });
 }
 function remember(){undo.push(structuredClone(snapshot()));if(undo.length>32)undo.shift();redo=[]}
-function persist(){clearTimeout(persistTimer);if(!ready)return;persistTimer=setTimeout(()=>{try{localStorage.setItem(projectKey,JSON.stringify(snapshot()));$('resume').hidden=false}catch{message('Для этого проекта используйте «Экспорт → Сохранить проект»')}},250)}
-async function loadState(next,resetHistory=false){
+function persist(updateModel=true){
+ clearTimeout(persistTimer);
+ if(!ready)return;
+ if(savedModel&&updateModel)modelDirty=true;
+ persistTimer=setTimeout(()=>{
+  persistSession();
+  task(flushModel);
+ },350);
+}
+async function loadState(next,resetHistory=false,entry=null){
  let incoming,index=0;
  if(next?.version===2){
   if(!Array.isArray(next.layers))throw Error('Некорректные слои проекта');
@@ -110,18 +143,86 @@ async function loadState(next,resetHistory=false){
  }
  incoming=incoming|| (next.art?[layerData({...def,...next})]:[]);
  const decoded=new Map(await Promise.all([...new Set(incoming.map(l=>l.art))].map(async src=>[src,await img(src)])));
- const newPhoto=await img(next.photo);if(seq!==epoch)return;
+ const newPhoto=await img(next.photo);
+ if(seq!==epoch)return;
+ if(resetHistory){
+  await flushModel();
+  if(seq!==epoch)return;
+  savedModel=entry;modelDirty=false;
+ }
  layers=incoming;active=index;images=decoded;hitAreas=[];cropDraft=cropDrag=null;next.crop=validCrop(next.crop);
  const newArt=decoded.get(next.art)||null;
  compareFlat=false;selected=false;mugCopy=0;s={...def,...next};photo=newPhoto;art=newArt;ready=true;editPlane=original=false;if(resetHistory){undo=[];redo=[]}
  $('carton-thickness-preset').selectedIndex=-1;
  if(resetHistory)$('base').open=isCartonMode(s.mode);
  $('welcome').hidden=true;$('studio').hidden=false;for(const id of ['exports','undo','redo'])$(id).hidden=false;
- $('docname').textContent=s.mode==='model'?'Ежедневник':s.mode==='mug'?'Кружка':'Своё фото';recolor();sync();persist();render();window.scrollTo(0,0);
+ $('docname').textContent=s.mode==='model'?'Ежедневник':s.mode==='mug'?'Кружка':'Своё фото';recolor();sync();persist(!resetHistory);render();window.scrollTo(0,0);
 }
 function recolor(){bitmap=art ? layerBitmap(s,art,false) : null}
 function graphicBitmap(art,s,maxSize=1200){const c=document.createElement('canvas'),k=Math.min(1,maxSize/Math.max(art.width,art.height));c.width=Math.max(1,Math.round(art.width*k));c.height=Math.max(1,Math.round(art.height*k));const t=c.getContext('2d');t.imageSmoothingQuality='high';t.drawImage(art,0,0,c.width,c.height);if(s.ink||s.method!=='print'){t.globalCompositeOperation='source-in';let fill=s.ink||'#575148';if(['gold','silver'].includes(s.method)){const grad=t.createLinearGradient(0,0,c.width,c.height),colors=s.method==='gold'?['#94723a','#ffedac','#b99146']:['#898b8e','#ffffff','#919398'];colors.forEach((v,i)=>grad.addColorStop(i/2,v));fill=grad}t.fillStyle=fill;t.fillRect(0,0,c.width,c.height)}return c}
-function palette(id,key,values){const el=$(id);el.replaceChildren();for(const v of values){const b=document.createElement('button');b.className='sw';b.style.background=v;b.title=v;b.setAttribute('aria-label',v);if(v===s[key]){b.textContent='✓';b.style.color=parseInt(v.slice(1,3),16)>170?'#202020':'white'}b.onclick=()=>set(key,v);el.append(b)}const l=document.createElement('label');l.className='custom';l.textContent='+';const c=document.createElement('input');c.type='color';c.value=s[key]||'#202020';c.setAttribute('aria-label',key==='background'?'Свой цвет фона':key==='handleColor'?'Свой цвет ручек':key==='cover'?'Свой цвет основы':'Свой цвет графики');c.onchange=()=>set(key,c.value);l.append(c);el.append(l)}
+const colorPattern=/^#[0-9a-f]{6}$/i;
+const paletteKey='maketeka-palette';
+let recentColors=[], pinnedColors=[];
+try{
+ const colors=JSON.parse(localStorage.getItem(paletteKey)||'{}');
+ recentColors=(colors.recent||[]).filter(v=>colorPattern.test(v));
+ pinnedColors=(colors.pinned||[]).filter(v=>colorPattern.test(v));
+}catch{}
+function storeColors(){
+ try{localStorage.setItem(paletteKey,JSON.stringify({recent:recentColors,pinned:pinnedColors}))}
+ catch{message('Не удалось сохранить палитру в браузере')}
+}
+function rememberColor(value){
+ if(typeof value!=='string'||!colorPattern.test(value))return;
+ const color=value.toLowerCase();
+ recentColors=[color,...recentColors.filter(v=>v!==color)].slice(0,8);
+ storeColors();
+}
+function colorSwatch(color,current,apply){
+ const button=document.createElement('button');
+ button.type='button';button.className='sw';button.style.background=color;
+ button.title=color;button.setAttribute('aria-label',color);
+ button.setAttribute('aria-pressed',String(color===current));
+ if(color===current){
+  button.textContent='✓';
+  button.style.color=parseInt(color.slice(1,3),16)>170?'#202020':'white';
+ }
+ button.onclick=()=>apply(color);
+ return button;
+}
+function colorRows(el,current,apply){
+ const selectedColor=current?.toLowerCase();
+ for(const [title,colors] of [['Недавние',recentColors.filter(color=>!pinnedColors.includes(color))],['Мои цвета',pinnedColors]]){
+  if(!colors.length)continue;
+  const row=document.createElement('div');
+  row.className='palettePins';row.append(title);
+  for(const color of colors)row.append(colorSwatch(color,selectedColor,apply));
+  el.append(row);
+ }
+ if(!colorPattern.test(selectedColor))return;
+ const button=document.createElement('button');
+ button.type='button';
+ const pinned=pinnedColors.includes(selectedColor);
+ button.textContent=pinned?'Открепить цвет':'В мои цвета';
+ button.onclick=()=>{
+  pinnedColors=pinned?pinnedColors.filter(v=>v!==selectedColor):[selectedColor,...pinnedColors];
+  storeColors();sync();
+ };
+ el.append(button);
+}
+function palette(id,key,values){
+ const el=$(id),current=s[key]?.toLowerCase();
+ const apply=color=>{rememberColor(color);if(s[key]===color)sync();else set(key,color)};
+ el.replaceChildren();
+ for(const color of values)el.append(colorSwatch(color,current,apply));
+ const label=document.createElement('label'),picker=document.createElement('input');
+ label.className='custom';label.textContent='+';
+ picker.type='color';picker.value=current||'#202020';
+ picker.setAttribute('aria-label',{background:'Свой цвет фона',handleColor:'Свой цвет ручек',cover:'Свой цвет основы',ink:'Свой цвет графики'}[key]);
+ picker.onchange=()=>apply(picker.value);
+ label.append(picker);el.append(label);
+ colorRows(el,current,apply);
+}
 function units(){return (isCartonMode(s.mode)?cartonPrintFaces(s.carton)[s.bagSide||'front'].width:merch[s.mode]?.width)??(s.mode==='mug'?printWidth:s.mode==='model'?145:s.mode==='bag'?bagFormats[s.bagFormat].width:s.mm||100)}
 function curved(){return s.mode==='photo' && s.surfaceType==='cylinder'}
 const defaults={angle:null,shadow:85,shine:85,position:50,glowSize:30};
@@ -143,6 +244,7 @@ for(const key of ['direction','position','shadow','shine','glowSize']){
 $('autoLight').onclick=()=>{compareFlat=false;set('lighting',{...lighting(),angle:null})};
 $('flat').onclick=()=>{compareFlat=!compareFlat;syncLight();render()};
 function sync(){
+ $('saveModel').textContent=savedModel?'Сохранить как копию':'Сохранить модель';
  const bag=s.mode==='bag',product=merch[s.mode],carton=isCartonMode(s.mode);
  $('formatLabel').hidden=!bag;
  $('handleBlock').hidden=carton||!(bag||product?.accent);
@@ -190,6 +292,7 @@ function sync(){
   finish.options[1].disabled=!canGloss;
   finish.disabled=!canGloss;
   updateCartonOpening();
+  cartonColorRows.forEach(refresh=>refresh());
   const size=cartonSize(s.carton);
   $('cartonOuter').textContent='Снаружи ≈ '+[size.width,size.depth,size.height].map(n=>+n.toFixed(2)).join(' × ')+' мм';
  }
@@ -522,7 +625,7 @@ $('studioLight').oninput=e=>{
 $('studioLight').onchange=()=>{adjustingLight=false;sync()};
 $('glossy').onchange=e=>set('glossy',e.target.checked);
 $('bothSides').onchange=e=>set('bothSides',e.target.checked);
-function home(){cropDraft=cropDrag=null;syncCropFrame();if(ready){clearTimeout(persistTimer);try{localStorage.setItem(projectKey,JSON.stringify(snapshot()))}catch{}$('resume').hidden=false}ready=false;$('studio').hidden=true;$('welcome').hidden=false;for(const id of ['undo','redo','exports'])$(id).hidden=true;$('docname').textContent='Студия мокапов';window.scrollTo(0,0)}
+function home(){cropDraft=cropDrag=null;syncCropFrame();if(ready){clearTimeout(persistTimer);persistSession();task(flushModel)}epoch++;ready=false;$('studio').hidden=true;$('welcome').hidden=false;for(const id of ['undo','redo','exports'])$(id).hidden=true;$('docname').textContent='Студия мокапов';window.scrollTo(0,0)}
 $('home').onclick = $('change').onclick = home;
 for(const key of ['length','depth','height','thickness','lidHeight','material']){
  const input=$('carton-'+key);
@@ -586,6 +689,7 @@ $('cartonPrintFace').onchange=e=>{
  [s.yaw,s.pitch]=cartonFaceViews[side]||coverView;
  selected=true;sync();render();persist();
 };
+const cartonColorRows=[];
 bindCartonColor($('carton-coating'),'coating',()=>isCartonMode(s.mode));
 bindCartonColor($('carton-magnetic-cover'),'lidColor',()=>s.mode==='magneticBox');
 $('carton-reset-coating').onclick=()=>set('carton',{...s.carton,coating:''});
@@ -613,10 +717,19 @@ function bindCartonColor(picker,key,enabled){
  function finishPicking(){
   if(!picking)return;
   picking=false;
-  sync();persist();
+  rememberColor(picker.value);sync();persist();
  }
  picker.onchange=()=>{preview();finishPicking()};
  picker.onblur=finishPicking;
+ const rows=document.createElement('div');rows.className='palette';
+ picker.closest('label').after(rows);
+ cartonColorRows.push(()=>{
+  rows.replaceChildren();
+  if(!enabled())return;
+  colorRows(rows,s.carton[key]||picker.value,color=>{
+   picker.value=color;preview();finishPicking();
+  });
+ });
 }
 function updateCartonOpening(){
  const opening=s.carton.opening;
@@ -809,7 +922,11 @@ $('save').onclick=()=>{download(new Blob([JSON.stringify(snapshot())],{type:'app
  }finally{button.disabled=false;frame.width=frame.height=c.width=c.height=1}
 });
 $('open').onclick=()=>$('projectInput').click();fileInput('projectInput',async f=>{if(f.name.toLowerCase().endsWith('.zip')){await legacyProject(f);return}await loadState(JSON.parse(await f.text()),true)});
-try{$('resume').hidden=!localStorage.getItem(projectKey)}catch{}$('resume').onclick=()=>task(()=>loadState(JSON.parse(localStorage.getItem(projectKey)),true));
+try{$('resume').hidden=!localStorage.getItem(projectKey)}catch{}$('resume').onclick=()=>task(async()=>{
+ const id=localStorage.getItem(resumeModelKey);
+ const entry=id?(await list('models')).find(model=>model.id===id):null;
+ await loadState(entry?.state??JSON.parse(localStorage.getItem(projectKey)),true,entry);
+});
 
 
 async function legacyProject(file){
@@ -1075,3 +1192,302 @@ for(const control of document.querySelectorAll('[data-finish]')) {
 reducedMotion.addEventListener('change',()=>{rotating=!reducedMotion.matches;refreshDemo()});
 document.addEventListener('visibilitychange',refreshDemo);
 new MutationObserver(refreshDemo).observe($('welcome'),{attributes:true,attributeFilter:['hidden']});
+
+function modelTitle(state){
+ if(state.mode==='photo')return 'Своё фото';
+ return catalogModels[state.mode==='bag'&&state.bagFormat==='bottle'?'bottle':state.mode].name;
+}
+function modelPreview(){
+ try{
+ const thumb=document.createElement('canvas');
+ thumb.width=300;thumb.height=200;
+ paint(thumb.getContext('2d'),300,200,true,false,true);
+ return thumb.toDataURL('image/webp',.78);
+ }catch{return savedModel?.preview||''}
+}
+function button(label,action){
+ const element=document.createElement('button');
+ element.type='button';element.textContent=label;element.onclick=()=>task(action);
+ return element;
+}
+function submit(id,action){
+ const form=$(id);
+ form.onsubmit=event=>{
+  event.preventDefault();
+  const title=form.elements.title.value.trim();
+  if(!title){form.elements.title.focus();return}
+  const submitter=event.submitter;
+  if(submitter?.disabled)return;
+  if(submitter)submitter.disabled=true;
+  task(async()=>{
+   try{await action(title,form)}
+   finally{if(submitter)submitter.disabled=false}
+  });
+ };
+}
+function newest(entries){return entries.sort((a,b)=>b.updated-a.updated)}
+const selectedModels=new Set();
+
+async function openCollection(){
+ await flushModel();
+ const [models,scenes]=await Promise.all([list('models'),list('scenes')]);
+ const modelList=$('modelList'),sceneList=$('sceneList');
+ modelList.replaceChildren();sceneList.replaceChildren();
+ selectedModels.clear();$('buildScene').disabled=true;
+ for(const entry of newest(models)){
+  const card=document.createElement('article');
+  const open=button(entry.title,async()=>{
+   open.disabled=true;
+   try{
+    await loadState(entry.state,true,entry);
+    $('collectionDialog').close();
+   }finally{open.disabled=false}
+  });
+  if(entry.preview){
+   const thumb=document.createElement('img');thumb.src=entry.preview;thumb.alt='';
+   open.prepend(thumb);
+  }
+  card.append(open);
+  if(entry.state.mode!=='photo'){
+   const label=document.createElement('label'),check=document.createElement('input');
+   check.type='checkbox';check.setAttribute('aria-label','Добавить в сцену: '+entry.title);
+   check.onchange=()=>{
+    if(check.checked)selectedModels.add(entry.id);
+    else selectedModels.delete(entry.id);
+    $('buildScene').disabled=selectedModels.size<2;
+   };
+   label.append(check,'В сцену');card.append(label);
+  }
+  modelList.append(card);
+ }
+ if(!models.length)modelList.textContent='Сохраните изделие из редактора, чтобы оно появилось здесь.';
+ for(const entry of newest(scenes))sceneList.append(button(entry.title,()=>openScene(entry)));
+ if(!scenes.length)sceneList.textContent='Выберите от двух моделей, чтобы собрать общий кадр.';
+ if(!$('collectionDialog').open)$('collectionDialog').showModal();
+ $('buildScene').onclick=()=>task(()=>openScene({
+  title:'',background:'#eeece8',light:100,transparent:false,
+  items:layoutModels(models.filter(entry=>selectedModels.has(entry.id)))
+ }));
+}
+
+$('collection').onclick=()=>task(openCollection);
+$('saveModel').onclick=()=>{
+ $('modelForm').elements.title.value=savedModel?savedModel.title+' — копия':modelTitle(s);
+ $('saveModelDialog').showModal();$('modelForm').elements.title.select();
+};
+submit('modelForm',async title=>{
+ await flushModel();
+ const entry={id:crypto.randomUUID(),title,state:snapshot(),preview:modelPreview(),updated:Date.now()};
+ await put('models',entry);
+ savedModel=entry;modelDirty=false;sync();persistSession();
+ $('saveModelDialog').close();message('Модель сохранена');
+});
+
+function captureStyle(){
+ const graphic=art?Object.fromEntries(['art','name','ink','method','opacity','intensity','bothSides'].map(key=>[key,s[key]])):null;
+ const carton=s.carton;
+ return {
+  graphic,glossy:s.glossy,
+  cover:carton?(carton.coating||cartonMaterials[carton.material].surface):s.mode==='photo'?'':s.cover,
+  accent:s.mode==='bag'||merch[s.mode]?.accent?s.handleColor:'',
+  ...(carton?{lidColor:carton.lidColor,insideColor:carton.insideColor}:{})
+ };
+}
+async function applyStyle(style){
+ const useColors=$('styleColors').checked&&s.mode!=='photo';
+ const graphic=$('styleArtwork').checked?style.graphic:null;
+ if(!useColors&&!graphic){message('Выберите доступные параметры стиля');return}
+ const replacement=graphic?await img(graphic.art):null;
+ remember();
+ if(useColors){
+  s.glossy=style.glossy;
+  if(isCartonMode(s.mode)){
+   const box={...s.carton};
+   if(style.cover)box.coating=style.cover;
+   if(s.mode==='rigidBox'||s.mode==='magneticBox'){
+    if(style.lidColor)box.lidColor=style.lidColor;
+    if(s.mode==='rigidBox'&&style.insideColor)box.insideColor=style.insideColor;
+   }
+   s.carton=normalizeCarton(box,s.mode);
+   if(!cartonAllowsGloss(s.carton))s.glossy=false;
+  }else{
+   if(style.cover)s.cover=style.cover;
+   if(style.accent&&(s.mode==='bag'||merch[s.mode]?.accent))s.handleColor=style.accent;
+  }
+ }
+ if(replacement){
+  const keep=!!art;
+  const panel=isCartonMode(s.mode)?cartonPrintFaces(s.carton)[s.bagSide||'front']:merch[s.mode];
+  const aspect=panel?panel.width/panel.height:s.mode==='mug'?Math.PI:s.mode==='bag'?units()/bagFormats[s.bagFormat].height:s.mode==='model'?145/210:ratio;
+  const pose=s.mode==='mug'?mugDefaults():fresh(s.mode);
+  Object.assign(s,graphic,{
+   x:pose.x,y:pose.y,angle:0,
+   width:Math.min(.65,.68*replacement.width/replacement.height/Math.max(.08,aspect)),
+   bothSides:!!graphic.bothSides&&(!isCartonMode(s.mode)&&(s.mode==='bag'||s.mode==='mug'||!!merch[s.mode]))
+  });
+  images.set(s.art,replacement);art=replacement;
+  if(!keep){layers=currentLayers();active=layers.length;layers.push(layerData(s))}
+  selected=false;mugCopy=0;recolor();
+ }
+ sync();render();persist();
+ $('styleDialog').close();message('Стиль применён');
+}
+async function showStyles(){
+ const entries=newest(await list('styles')),container=$('styleList');
+ container.replaceChildren();
+ for(const entry of entries){
+  const control=button(entry.title,async()=>{
+   control.disabled=true;
+   try{await applyStyle(entry.style)}finally{control.disabled=false}
+  });
+  container.append(control);
+ }
+ if(!entries.length)container.textContent='Сохраните оформление текущего изделия как стиль.';
+ if(!$('styleDialog').open)$('styleDialog').showModal();
+}
+$('openStyles').onclick=()=>task(showStyles);
+submit('styleForm',async(title,form)=>{
+ await put('styles',{id:crypto.randomUUID(),title,style:captureStyle(),updated:Date.now()});
+ form.reset();await showStyles();message('Стиль сохранён');
+});
+
+function sceneSpan(state){
+ if(isCartonMode(state.mode)){
+  const {width,depth,height}=cartonSize(state.carton);
+  return Math.max(width,depth,height);
+ }
+ if(state.mode==='bag'){
+  const spec=bagFormats[state.bagFormat];
+  return spec.height+spec.loop;
+ }
+ return merch[state.mode]?.span??(state.mode==='mug'?112:220);
+}
+function layoutModels(models){
+ const spans=models.map(entry=>sceneSpan(entry.state));
+ const total=spans.reduce((sum,value)=>sum+value,0);
+ const scale=Math.min(77/total,42/Math.max(...spans));
+ let x=(100-total*scale)/2;
+ return models.map((entry,i)=>{
+  const size=spans[i]*scale;
+  const item={sourceId:entry.id,title:entry.title,state:entry.state,x:x+size/2,y:76,size,yaw:Math.round(entry.state.yaw*180/Math.PI)};
+  x+=size;return item;
+ });
+}
+
+let scene=null,sceneAssets=new Map(),sceneFrame;
+async function decodeSceneItem(item){
+ return new Map(await Promise.all(item.state.layers.map(async layer=>[layer.art,await img(layer.art)])));
+}
+async function openScene(entry){
+ const draft=structuredClone(entry);
+ const decoded=await Promise.all(draft.items.map(decodeSceneItem));
+ scene=draft;sceneAssets=new Map(draft.items.map((item,i)=>[item,{images:decoded[i]}]));
+ $('sceneForm').elements.title.value=scene.title;
+ $('sceneBackground').value=scene.background;
+ $('sceneLight').value=scene.light;
+ $('sceneTransparent').checked=scene.transparent;
+ renderSceneControls();
+ $('collectionDialog').close();
+ $('sceneDialog').showModal();queueScene();
+}
+function renderSceneControls(){
+ const controls=$('sceneItems');
+ controls.replaceChildren();
+ for(const item of scene.items){
+  const fieldset=document.createElement('fieldset'),legend=document.createElement('legend');
+  legend.textContent=item.title;fieldset.append(legend);
+  for(const [key,title,min,max] of [['x','X, %',0,100],['y','Y, %',0,100],['size','Размер, %',1,100],['yaw','Поворот, °',-360,360]]){
+   const label=document.createElement('label'),input=document.createElement('input');
+   input.type='number';input.min=min;input.max=max;input.value=Math.round(item[key]);
+   input.oninput=()=>{
+    if(input.value==='')return;
+    item[key]=clamp(+input.value,min,max);queueScene();
+   };
+   input.onchange=()=>{input.value=Math.round(item[key])};
+   label.append(title,input);fieldset.append(label);
+  }
+  const refresh=button('Обновить из модели',async()=>{
+   const entry=(await list('models')).find(model=>model.id===item.sourceId);
+   if(!entry)throw Error('Исходная модель недоступна');
+   const decoded=await decodeSceneItem(entry);
+   item.state=entry.state;item.title=entry.title;
+   sceneAssets.set(item,{images:decoded});
+   renderSceneControls();queueScene();
+  });
+  fieldset.append(refresh);controls.append(fieldset);
+ }
+}
+function scenePixelsPerMm(state,resolution){
+ if(state.mode==='model')return resolution/274;
+ if(state.mode==='mug')return mugView(resolution,resolution,{zoom:.8,pitch:-.27,yaw:0}).scale;
+ if(state.mode==='bag'){
+  const {width,height,depth,loop}=bagFormats[state.bagFormat];
+  return resolution/Math.max(width+depth+90,height+loop+95);
+ }
+ let span=merch[state.mode].span;
+ if(isCartonMode(state.mode)){
+  const {width,depth,height}=cartonSize(state.carton);
+  span=Math.max(Math.hypot(width,depth),height+depth)*1.14;
+ }
+ return resolution/(span*1.13);
+}
+function sceneTile(item,resolution){
+ const cache=sceneAssets.get(item);
+ const key=[item.yaw,scene.light,resolution].join('/');
+ if(cache.key===key)return cache;
+ const tile=document.createElement('canvas');
+ tile.width=tile.height=resolution;
+ const target=tile.getContext('2d',{willReadFrequently:true});
+ const old={s,layers,active,images,art,bitmap};
+ try{
+  layers=item.state.layers;active=item.state.active;images=cache.images;
+  const layer=layers[active]||fresh(item.state.mode);
+  s={...fresh(item.state.mode),...item.state,...layerData(layer),zoom:1,yaw:item.yaw*Math.PI/180,pitch:-.27,background:'',studioLight:scene.light};
+  art=images.get(s.art)||null;bitmap=null;
+  paint(target,resolution,resolution,true,true);
+ }finally{
+  ({s,layers,active,images,art,bitmap}=old);
+ }
+ const {data}=target.getImageData(0,0,resolution,resolution);
+ let left=resolution,right=0,top=resolution,bottom=0;
+ for(let y=0;y<resolution;y++)for(let x=0;x<resolution;x++){
+  if(data[(y*resolution+x)*4+3]<8)continue;
+  left=Math.min(left,x);right=Math.max(right,x);top=Math.min(top,y);bottom=Math.max(bottom,y);
+ }
+ const bounds=[Math.max(0,left-5),Math.max(0,top-5),Math.min(resolution,right+6),Math.min(resolution,bottom+6)];
+ return Object.assign(cache,{key,tile,bounds});
+}
+function paintScene(canvas,transparent,resolution){
+ const t=canvas.getContext('2d'),{width,height}=canvas;
+ t.clearRect(0,0,width,height);
+ if(!transparent){t.fillStyle=scene.background;t.fillRect(0,0,width,height)}
+ t.imageSmoothingQuality='high';
+ for(const item of [...scene.items].sort((a,b)=>a.y-b.y)){
+  const {tile,bounds:[left,top,right,bottom]}=sceneTile(item,resolution);
+  const w=right-left,h=bottom-top;
+  if(w<=0||h<=0)continue;
+  const scale=width*item.size/100/sceneSpan(item.state)/scenePixelsPerMm(item.state,resolution);
+  t.drawImage(tile,left,top,w,h,width*item.x/100+(left-resolution/2)*scale,height*item.y/100-h*scale,w*scale,h*scale);
+ }
+}
+function queueScene(){
+ cancelAnimationFrame(sceneFrame);
+ sceneFrame=requestAnimationFrame(()=>{
+  if($('sceneDialog').open)task(()=>paintScene($('scenePreview'),false,420));
+ });
+}
+$('sceneBackground').oninput=e=>{scene.background=e.target.value;queueScene()};
+$('sceneLight').oninput=e=>{scene.light=+e.target.value;queueScene()};
+$('sceneTransparent').onchange=e=>{scene.transparent=e.target.checked};
+submit('sceneForm',async title=>{
+ const entry=structuredClone({...scene,id:scene.id||crypto.randomUUID(),title,updated:Date.now()});
+ await put('scenes',entry);
+ scene.id=entry.id;scene.title=title;message('Сцена сохранена');
+});
+$('scenePng').onclick=()=>task(async()=>{
+ const canvas=document.createElement('canvas');canvas.width=2400;canvas.height=1600;
+ paintScene(canvas,scene.transparent,1200);
+ const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
+ if(!blob)throw Error('Не удалось создать PNG');
+ download(await printPng(blob),'maketeka-scene.png');
+});
