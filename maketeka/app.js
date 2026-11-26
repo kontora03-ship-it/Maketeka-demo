@@ -20,7 +20,7 @@ let savedModel=null, modelDirty=false, modelWrite=Promise.resolve();
 function flushModel(){
  if(!ready||!savedModel||!modelDirty)return modelWrite;
  modelDirty=false;
- const entry={...savedModel,state:structuredClone(snapshot()),preview:modelPreview(),updated:Date.now()};
+ const entry={...savedModel,state:structuredClone(snapshot()),preview:modelPreview(savedModel.preview),updated:Date.now()};
  modelWrite=modelWrite.catch(()=>{}).then(()=>put('models',entry)).then(()=>{
   if(savedModel?.id===entry.id)savedModel=entry;
  }).catch(error=>{
@@ -31,9 +31,13 @@ function flushModel(){
 }
 function persistSession(){
  try{
+  if(savedModel){
+   localStorage.setItem(resumeModelKey,savedModel.id);
+   $('resume').hidden=false;
+   return;
+  }
+  localStorage.removeItem(resumeModelKey);
   localStorage.setItem(projectKey,JSON.stringify(snapshot()));
-  if(savedModel)localStorage.setItem(resumeModelKey,savedModel.id);
-  else localStorage.removeItem(resumeModelKey);
   $('resume').hidden=false;
  }catch{
   if(!savedModel)message('Для этого проекта используйте «Экспорт → Сохранить проект»');
@@ -922,7 +926,7 @@ $('save').onclick=()=>{download(new Blob([JSON.stringify(snapshot())],{type:'app
  }finally{button.disabled=false;frame.width=frame.height=c.width=c.height=1}
 });
 $('open').onclick=()=>$('projectInput').click();fileInput('projectInput',async f=>{if(f.name.toLowerCase().endsWith('.zip')){await legacyProject(f);return}await loadState(JSON.parse(await f.text()),true)});
-try{$('resume').hidden=!localStorage.getItem(projectKey)}catch{}$('resume').onclick=()=>task(async()=>{
+try{$('resume').hidden=!(localStorage.getItem(resumeModelKey)||localStorage.getItem(projectKey))}catch{}$('resume').onclick=()=>task(async()=>{
  const id=localStorage.getItem(resumeModelKey);
  const entry=id?(await list('models')).find(model=>model.id===id):null;
  await loadState(entry?.state??JSON.parse(localStorage.getItem(projectKey)),true,entry);
@@ -1190,20 +1194,25 @@ for(const control of document.querySelectorAll('[data-finish]')) {
   };
 }
 reducedMotion.addEventListener('change',()=>{rotating=!reducedMotion.matches;refreshDemo()});
-document.addEventListener('visibilitychange',refreshDemo);
+document.addEventListener('visibilitychange',()=>{
+ refreshDemo();
+ if(document.hidden&&ready){
+  clearTimeout(persistTimer);persistSession();task(flushModel);
+ }
+});
 new MutationObserver(refreshDemo).observe($('welcome'),{attributes:true,attributeFilter:['hidden']});
 
 function modelTitle(state){
  if(state.mode==='photo')return 'Своё фото';
  return catalogModels[state.mode==='bag'&&state.bagFormat==='bottle'?'bottle':state.mode].name;
 }
-function modelPreview(){
+function modelPreview(fallback=''){
  try{
- const thumb=document.createElement('canvas');
- thumb.width=300;thumb.height=200;
- paint(thumb.getContext('2d'),300,200,true,false,true);
- return thumb.toDataURL('image/webp',.78);
- }catch{return savedModel?.preview||''}
+  const thumb=document.createElement('canvas');
+  thumb.width=300;thumb.height=200;
+  paint(thumb.getContext('2d'),300,200,true,false,true);
+  return thumb.toDataURL('image/webp',.78);
+ }catch{return fallback}
 }
 function button(label,action){
  const element=document.createElement('button');
