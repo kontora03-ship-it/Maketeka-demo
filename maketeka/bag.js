@@ -64,14 +64,18 @@ export function drawBag(ctx,w,h,state){
  const X=width/2,Z=depth/2,top=-height/2+loop/2,bottom=top+height;
  const yaw=state.yaw,pitch=state.pitch,roll=state.roll??.08;
  const cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch),cr=Math.cos(roll),sr=Math.sin(roll);
- const scale=Math.min(w/(width+depth+90),h/(height+loop+95))*state.zoom;
+ const pose=state.scenePose;
+ const scale=pose?.scale??(Math.min(w/(width+depth+90),h/(height+loop+95))*state.zoom);
  const floor=bottom+33,floorY=floorAnchorY(w,h,state.zoom);
  function transform(x,y,z){
+  if(pose)return pose.view(x,y,z);
   const u=cy*x+sy*z,d=-sy*x+cy*z,v=cp*y-sp*d;
   return [cr*u-sr*v,sr*u+cr*v,sp*y+cp*d];
  }
  function project(p){
-  const [x,y]=transform(...p);return [w/2+x*scale,floorY+(y-floor)*scale];
+  const view=transform(...p);
+  if(pose)return pose.project(view);
+  const [x,y]=view;return [w/2+x*scale,floorY+(y-floor)*scale];
  }
  const topRing=[[-X,top,Z],[X,top,Z],[X-depth*.24,top+2,0],[X,top,-Z],[-X,top,-Z],[-X+depth*.24,top+2,0]];
  const foot=topRing.map(([x,,z])=>[Math.sign(x)*X,bottom,z]);
@@ -242,10 +246,17 @@ export function drawBag(ctx,w,h,state){
   }
  }
  paintBackdrop(ctx,w,h,state);ctx.save();
- floorShadow(ctx,state.background,w/2,floorY,scale,[[...topRing,...foot]],transform,floor,scale*8);
+ if(pose){
+  const handles=[-1,1].flatMap(side=>Array.from({length:16},(_,i)=>{
+   const a=cordPoint(side,i/16),b=cordPoint(side,(i+1)/16);
+   return [a,b].flatMap(([x,y,z])=>[[x+cordRadius,y,z],[x-cordRadius,y,z],[x,y-cordRadius,z],[x,y+cordRadius,z],[x,y,z+cordRadius],[x,y,z-cordRadius]]);
+  }));
+  pose.record([[...topRing,...foot],...handles]);
+ }else floorShadow(ctx,state.background,w/2,floorY,scale,[[...topRing,...foot]],transform,floor,scale*8);
  // Mask the interior at the mouth so the far wall cannot bleed onto an outer fold.
- const far=cy>=0?-1:1;handle(far);
- if(sp<0){
+ const far=transform(0,0,1)[2]>=0?-1:1;handle(far);
+ const topVisible=transform(0,-1,0)[2]>0;
+ if(topVisible){
   ctx.save();path(topRing);ctx.clip();base(true);
   const innerDepth=f=>Math.max(...f.points.map(p=>transform(...p)[2]));
   panels.filter(f=>f.normal[2]<0).sort((a,b)=>innerDepth(a)-innerDepth(b)).forEach(f=>{
@@ -264,7 +275,7 @@ export function drawBag(ctx,w,h,state){
  ctx.fillStyle=tone(state.cover,.84,2);ctx.fill();
  visible.filter(f=>f.kind!=='broad').forEach(f=>face(f,false));
  visible.filter(f=>f.kind==='broad').forEach(f=>face(f,false));
- if(sp>0)base(false);
+ if(transform(0,1,0)[2]>0)base(false);
  ctx.restore();
  function hardware(){
   const near=-far;

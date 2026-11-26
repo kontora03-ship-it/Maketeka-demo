@@ -312,3 +312,13 @@ aside details h3,aside details h4{font:600 .88rem/1.3 'Source Sans 3',Arial,sans
 .sceneAdd {display:flex;flex-wrap:wrap;gap:8px;align-items:end}
 .sceneAdd label {min-width:0;margin:0}
 .sceneAdd select {max-width:100%}
+
+.sceneDialog {width:min(1240px,96vw);max-width:96vw}
+.sceneWorkspace {display:grid;grid-template-columns:minmax(0,1fr) minmax(240px,300px);gap:16px;align-items:start}
+.sceneTools,#sceneObjectList {display:flex;gap:6px;flex-wrap:wrap}
+#sceneObjectList button[aria-pressed="true"] {background:#d9f2ee;border-color:#007f74;color:#005f56}
+#sceneItems fieldset {min-width:0}
+#sceneItems fieldset label {flex:1 1 110px;margin:0}
+#sceneItems input {width:100%}
+#sceneForm {margin-top:10px;padding-top:8px;border-top:1px solid #dedfdd}
+@media(max-width:720px){.sceneDialog{padding:12px}.sceneWorkspace{grid-template-columns:1fr;gap:10px}}

@@ -41,7 +41,7 @@ function mugShadow(ctx,s,x,y,scale,softness,floorHeight){
  }
  floorShadow(ctx,s.background,x,y,scale,shadowParts,transform,floorHeight,softness);
 }
-const vertex='attribute vec3 pos,normal;attribute float ink;uniform vec2 scale,shift;uniform vec2 orbit;varying vec3 n,p;varying float printable;void main(){float c=cos(orbit.x),s=sin(orbit.x),k=cos(orbit.y),t=sin(orbit.y);vec3 v=vec3(c*pos.x+s*pos.z,pos.y,-s*pos.x+c*pos.z);vec3 m=vec3(c*normal.x+s*normal.z,normal.y,-s*normal.x+c*normal.z);n=vec3(m.x,k*m.y+t*m.z,-t*m.y+k*m.z);p=pos;printable=ink;gl_Position=vec4(v.x*scale.x+shift.x,(k*v.y+t*v.z)*scale.y+shift.y,-(-t*v.y+k*v.z)/130.,1.);}';
+const vertex='attribute vec3 pos,normal;attribute float ink;uniform vec2 scale,shift;uniform mat3 orientation;varying vec3 n,p;varying float printable;void main(){vec3 v=orientation*pos;n=orientation*normal;p=pos;printable=ink;gl_Position=vec4(v.xy*scale+shift,-v.z/130.,1.);}';
 const fragment=`precision highp float;
 varying vec3 n,p;varying float printable;
 uniform vec3 cover;uniform vec4 placement;uniform vec3 settings;uniform float repeatLogo;uniform float glossyFinish;uniform sampler2D art;
@@ -95,6 +95,7 @@ export function mugView(w,h,s){
  const shadowY=floorAnchorY(w,h,s.floorZoom??s.zoom);
  const floorHeight=s.grounded?-BASE_Y*k:63;
  const cy=shadowY-(floorHeight+(s.lift??0))*scale;
+ if(s.scenePose)return {scale:s.scenePose.scale,cx:w/2,cy:h/2};
  // The floor anchor is set once in camera space, independently of the orbit.
  const shadowX=w*.5;
  const softness=Math.min(w/209,h/274)*(s.floorZoom??s.zoom)*5.4;
@@ -108,22 +109,31 @@ export function mugView(w,h,s){
  return [((a-s.yaw)/TAU+.75+10)%1,.5-((cy-Y)/scale-t*R*Math.cos(a))/(k*H)];
  }};
 }
+function mugSceneMatrix(pose){
+ return [[1,0,0],[0,-1,0],[0,0,1]].flatMap(axis=>{
+  const [x,y,z]=pose.view(...axis);
+  return [x,-y,z];
+ });
+}
 export function drawMug(ctx,w,h,s,bitmap,output=false){
  scene??=init();const {g,canvas,loc}=scene,{scale,cx,cy,shadowX,shadowY,softness,floorHeight}=mugView(w,h,s);
+ if(s.scenePose)s.scenePose.record(shadowParts.map(part=>part.map(([x,y,z])=>[x,-y,z])));
  if(scene.software){paintSoftware(ctx,w,h,s,bitmap,output);return}
  const d=Math.min(ctx.getTransform().a||1,2),W=Math.round(w*d),height=Math.round(h*d);
  if(canvas.width!==W||canvas.height!==height){canvas.width=W;canvas.height=height}
  g.viewport(0,0,W,height);g.clearColor(0,0,0,0);g.clear(g.COLOR_BUFFER_BIT|g.DEPTH_BUFFER_BIT);
  if(bitmap&&scene.bitmap!==bitmap){g.texImage2D(g.TEXTURE_2D,0,g.RGBA,g.RGBA,g.UNSIGNED_BYTE,bitmap);scene.bitmap=bitmap}
  g.uniform2f(loc('scale'),2*scale/w,2*scale/h);g.uniform2f(loc('shift'),2*cx/w-1,1-2*cy/h);
- g.uniform2f(loc('orbit'),s.yaw,s.pitch);const color=parseInt(s.cover.slice(1),16);
+ const c=Math.cos(s.yaw),a=Math.sin(s.yaw),v=Math.cos(s.pitch),b=Math.sin(s.pitch);
+ const orientation=s.scenePose?mugSceneMatrix(s.scenePose):[c,-b*a,-v*a,0,v,-b,a,b*c,v*c];
+ g.uniformMatrix3fv(loc('orientation'),false,orientation);const color=parseInt(s.cover.slice(1),16);
  g.uniform3f(loc('cover'),(color>>16)/255,((color>>8)&255)/255,(color&255)/255);
  g.uniform4f(loc('placement'),s.x,s.y,s.width,s.angle*Math.PI/180);
  g.uniform3f(loc('settings'),bitmap?bitmap.height/bitmap.width:1,bitmap?s.opacity/100*(1-.07*s.intensity/100):0,(s.studioLight??100)/100);
  g.uniform1f(loc('glossyFinish'),s.glossy===false?0:1);
  g.uniform1f(loc('repeatLogo'),s.bothSides?1:0);g.drawArrays(g.TRIANGLES,0,mesh.length/7);
  paintBackdrop(ctx,w,h,s);ctx.save();
- mugShadow(ctx,s,shadowX,shadowY,scale,softness,floorHeight);ctx.restore();compositeMesh(ctx,canvas,w,h,s);
+ if(!s.scenePose)mugShadow(ctx,s,shadowX,shadowY,scale,softness,floorHeight);ctx.restore();compositeMesh(ctx,canvas,w,h,s);
 }
 
 // Rasterize the same geometry with depth testing on devices without WebGL.
@@ -142,7 +152,13 @@ function paintSoftware(ctx,w,h,s,bitmap,output){
  const cs=Math.cos(s.angle*Math.PI/180),sn=Math.sin(s.angle*Math.PI/180),alpha=s.opacity/100*(1-.07*s.intensity/100);
  function vertex(i){
   const x=mesh[i],y=mesh[i+1],z=mesh[i+2],nz=-a*mesh[i+3]+c*mesh[i+5],rz=-a*x+c*z;
-  const nx=c*mesh[i+3]+a*mesh[i+5],ny=v*mesh[i+4]+b*nz,nZ=-b*mesh[i+4]+v*nz;
+  let nx=c*mesh[i+3]+a*mesh[i+5],ny=v*mesh[i+4]+b*nz,nZ=-b*mesh[i+4]+v*nz;
+  let position=[c*x+a*z,-(v*y+b*rz),-b*y+v*rz];
+  if(s.scenePose){
+   position=s.scenePose.view(x,-y,z);
+   const normal=s.scenePose.view(mesh[i+3],-mesh[i+4],mesh[i+5]);
+   [nx,ny,nZ]=[normal[0],-normal[1],normal[2]];
+  }
   const dot=(-.55*nx+.85*ny+.8*nZ)/Math.hypot(.55,.85,.8);
   const glossy=s.glossy!==false;
   const stripX=(nx+.32)*(glossy?7.4:2.6),stripY=(ny-.12)*(glossy?1.7:1.1);
@@ -151,7 +167,7 @@ function paintSoftware(ctx,w,h,s,bitmap,output){
   const fade=t=>{t=Math.max(0,Math.min(1,t));return t*t*(3-2*t)};
   const cavity=Math.max(0,Math.min(1,(45-y)/75))*(1-fade(Math.hypot(x,z)-36.2))*fade((y+45)/4);
   const lit=.65-.23*cavity+.37*Math.max(0,dot)+.05*ny;
-  return [cx+scale*(c*x+a*z),cy-scale*(v*y+b*rz),-b*y+v*rz,
+  return [cx+scale*position[0],cy+scale*position[1],position[2],
     neutral*(1-strength)+lit*(1-gloss)*strength,gloss*strength,x,y,z,mesh[i+6],(glossy?.19:.43)*(1-gloss)*Math.exp(-(((nx+.32)*6.5)**2)-((ny-.12)*1.6)**2)*Math.max(0,nZ)*strength];
  }
  for(let i=0;i<mesh.length;i+=21){
@@ -180,7 +196,7 @@ function paintSoftware(ctx,w,h,s,bitmap,output){
   }
  }
  t.putImageData(frame,0,0);paintBackdrop(ctx,w,h,s);ctx.save();
- mugShadow(ctx,s,shadowX/k,shadowY/k,scale/k,softness/k,floorHeight);ctx.restore();compositeMesh(ctx,canvas,w,h,s);
+ if(!s.scenePose)mugShadow(ctx,s,shadowX/k,shadowY/k,scale/k,softness/k,floorHeight);ctx.restore();compositeMesh(ctx,canvas,w,h,s);
 }
 
 function compositeMesh(ctx,canvas,w,h,state){

@@ -98,6 +98,12 @@ function polygon(ctx,points,shade) {path(ctx,points);ctx.fillStyle=shade;ctx.fil
 function setup(width,height,options) {
   const {yaw=-.26,pitch=-.20,zoom=1}=options;
   const cy=Math.cos(yaw),sy=Math.sin(yaw),cx=Math.cos(pitch),sx=Math.sin(pitch);
+  if(options.scenePose){
+    const pose=options.scenePose;
+    const facing=pose.view(0,0,1)[2];
+    return {transform:pose.view,project:(...point)=>pose.project(pose.view(...point)),
+      scale:pose.scale,zoom,visible:facing>0,facing};
+  }
   const roll=options.roll??.125,cr=Math.cos(roll),sr=Math.sin(roll);
   const scale=Math.min(width/209,height/274)*zoom;
   const centerX=width*.5,centerY=height*.469;
@@ -218,7 +224,8 @@ export function drawNotebook(ctx,width,height,options={}) {
   const {project,scale,visible,facing}=s;
   ctx.save();
   paintBackdrop(ctx,width,height,options);
-  notebookShadow(ctx,width,height,s,options.background);
+  if(options.scenePose)options.scenePose.record(shadowParts);
+  else notebookShadow(ctx,width,height,s,options.background);
   const texture=coverSurface(color,options.glossy);
   function casing(side) {
     const z=side*DEPTH/2, zin=side*(DEPTH/2-1.55);

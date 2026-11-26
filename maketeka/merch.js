@@ -19,14 +19,17 @@ export function drawMerch(t,w,h,s,atlases={},{fixedOrbit=false}={}){
  const spec=merch[s.mode],pen=s.mode==='pen',tote=s.mode==='tote',tee=s.mode==='tee',parts=[],shadow=[],contact=[],tiles=[];
  const carton=isCartonMode(s.mode),cartonDimensions=carton?cartonSize(s.carton):null;
  const span=cartonDimensions?Math.max(Math.hypot(cartonDimensions.width,cartonDimensions.depth),cartonDimensions.height+cartonDimensions.depth)*1.14:spec.span;
+ const pose=s.scenePose,scenePoints=[];
  const roll=pen?-1.18:(s.roll??.06),cy=Math.cos(s.yaw),sy=Math.sin(s.yaw),cp=Math.cos(s.pitch),sp=Math.sin(s.pitch),cr=Math.cos(roll),sr=Math.sin(roll);
  let scale=Math.min(w/(span*(pen?.99:.83)),h/(span*1.13))*s.zoom;
  const floorY=tee?h*.47+scale*407:floorAnchorY(w,h,s.zoom),floor=tee?407:pen?Math.abs(cr)*72+16:tote?338:119;
- function rotate(x,y,z){const a=cy*x+sy*z,b=cy*z-sy*x,c=cp*y-sp*b;return [cr*a-sr*c,sr*a+cr*c,sp*y+cp*b]}
+ function rotate(x,y,z){if(pose)return pose.view(x,y,z);const a=cy*x+sy*z,b=cy*z-sy*x,c=cp*y-sp*b;return [cr*a-sr*c,sr*a+cr*c,sp*y+cp*b]}
+ if(pose)scale=pose.scale;
  let centerX=0,centerY=0;
  const cartonBounds=[Infinity,Infinity,-Infinity,-Infinity];
  let orbitTop=Infinity,orbitBottom=-Infinity,orbitRadius=0;
  function screen(v){
+  if(pose)return pose.project(v);
   if(tee)return [w/2+scale*v[0],h*.47+scale*v[1]];
   return carton
    ? [w/2+scale*(v[0]-centerX),h/2+scale*(v[1]-centerY)]
@@ -35,6 +38,7 @@ export function drawMerch(t,w,h,s,atlases={},{fixedOrbit=false}={}){
  const paper=s.cover||'#ffffff',accent=s.handleColor||(tote?'#000000':'#343434'),strength=(s.studioLight??100)/100;
  const sums=new Map();
  function face(points,color,uv,side,cloth=false,smooth='',finish='',occlusion=null){
+  if(pose)scenePoints.push(...points);
   const vs=points.map(p=>rotate(...p));
   if(fixedOrbit){
    for(const [x,y,z] of points){
@@ -70,14 +74,14 @@ export function drawMerch(t,w,h,s,atlases={},{fixedOrbit=false}={}){
  }
  if(carton){
   buildCarton(s.carton,face,shadow);
-  if(fixedOrbit){
+  if(!pose&&fixedOrbit){
    // Keep the vertical rotation axis at the center of the canvas.
    [centerX,centerY]=rotate(0,(orbitTop+orbitBottom)/2,0);
    const halfHeight=(orbitBottom-orbitTop)/2;
    const extentX=orbitRadius*Math.hypot(cr,sr*sp)+halfHeight*Math.abs(sr*cp);
    const extentY=orbitRadius*Math.hypot(sr,cr*sp)+halfHeight*Math.abs(cr*cp);
    scale=Math.min(scale,s.zoom*w*.435/extentX,s.zoom*h*.39/extentY);
-  }else{
+  }else if(!pose){
    const [left,top,right,bottom]=cartonBounds;
    centerX=(left+right)/2;centerY=(top+bottom)/2;
    scale=Math.min(scale,s.zoom*w*.87/(right-left),s.zoom*h*.78/(bottom-top));
@@ -209,7 +213,8 @@ export function drawMerch(t,w,h,s,atlases={},{fixedOrbit=false}={}){
   }
  }
  paintBackdrop(t,w,h,s);
- if(carton){
+ if(pose)pose.record([scenePoints]);
+ else if(carton){
   cartonShadow(t,shadow[0].map(p=>screen(rotate(...p))),scale,strength,s.background);
  }else if(tee){
   floorShadow(t,s.background,w/2,floorY,scale,shadow,rotate,floor,scale*27,{opacity:.77,bounce:false});

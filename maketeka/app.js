@@ -1,13 +1,14 @@
+import {arrangeScene,cameraAngle,createScenePose,fitScene,floorGeometry,floorSlope,overlaps,sceneBounds,verticalScale} from './scene-geometry.js';
 import {list,put} from './collection.js';
 import {chooseCrop,cropPixels,dragCrop,exportCrop,validCrop} from './crop.js?v=sceneCrop1';
 import {cartonAllowsGloss,cartonMaterials,cartonPrintFaces,cartonSize,cartonThicknessPresets,freshCarton,isCartonMode,normalizeCarton} from './carton.js?v=magneticCenter1';
-import {merch,drawMerch,merchProjection} from './merch.js?v=cottonTee1';
-import {drawBag,bagInk,bagFormats} from './bag.js?v=studioDepthGrid';
+import {merch,drawMerch,merchProjection} from './merch.js?v=sceneGround1';
+import {drawBag,bagInk,bagFormats} from './bag.js?v=sceneGround1';
 import {photoAngle,paintLight} from './light.js?v=layers1';
 import {printPng} from './print.js';
-import {drawMug,mugView,printWidth} from './mug.js?v=showcaseMugTilt';
+import {drawMug,mugView,printWidth} from './mug.js?v=sceneGround1';
 import {defaultBody,validBody,cylinder,wrapImage,drawGuides} from './cylinder.js';
-import * as model from './model.js?v=studioDepthGrid';
+import * as model from './model.js?v=sceneGround1';
 import {plane,convex,inside,stamp} from './geometry.js?v=logoEdit2';
 const $=id=>document.getElementById(id), canvas=$('canvas'), ctx=canvas.getContext('2d'), clamp=(n,l,h)=>Math.min(h,Math.max(l,n));
 const teeAppearance={cover:'#ffffff',x:.68,y:.305,width:.175};
@@ -442,7 +443,7 @@ function paintProduct(t,w,h,items,output,transparentBackdrop){
  const sources=items.map(l=>images.get(l.art));
  let atlas=merchAtlasCache?.atlas;
  if(output||!atlas||key!==merchAtlasCache.key||sources.some((img,i)=>img!==merchAtlasCache.sources[i])){
-  atlas=merchAtlases(faces,items,l=>layerBitmap(l,images.get(l.art),output),output?3508:1024);
+  atlas=merchAtlases(faces,items,l=>layerBitmap(l,images.get(l.art),output),output&&(!s.scenePose||w>420)?3508:1024);
   if(!output)merchAtlasCache={key,sources,atlas};
  }
  const tiles=drawMerch(t,w,h,{...s,transparentBackdrop},atlas);
@@ -496,7 +497,7 @@ function paint(t,w,h,output=false,transparentBackdrop=false,matchView=false){
   return;
  }
  let box=null,cover=null,bagFaces=null,overlay=null;
- const options={transparentBackdrop,glossy:s.glossy,yaw:s.yaw,pitch:s.pitch,zoom:z,cover:s.cover,background:s.background,studioLight:s.studioLight};
+ const options={transparentBackdrop,scenePose:s.scenePose,glossy:s.glossy,yaw:s.yaw,pitch:s.pitch,zoom:z,cover:s.cover,background:s.background,studioLight:s.studioLight};
  if(s.mode==='model')cover=model.drawNotebook(t,w,h,options);
  else if(s.mode==='bag')bagFaces=drawBag(t,w,h,{...s,zoom:z,transparentBackdrop});
  else if(photo){
@@ -1363,7 +1364,7 @@ submit('styleForm',async(title,form)=>{
 function sceneSpan(state){
  if(isCartonMode(state.mode)){
   const {width,depth,height}=cartonSize(state.carton);
-  return Math.max(width,depth,height);
+  return Math.hypot(width,depth,height)*(state.carton.opening?1.5:1);
  }
  if(state.mode==='bag'){
   const spec=bagFormats[state.bagFormat];
@@ -1372,22 +1373,18 @@ function sceneSpan(state){
  return merch[state.mode]?.span??(state.mode==='mug'?112:220);
 }
 function layoutModels(models){
- const spans=models.map(entry=>sceneSpan(entry.state));
- const total=spans.reduce((sum,value)=>sum+value,0);
- const scale=Math.min(77/total,42/Math.max(...spans));
- let x=(100-total*scale)/2;
- return models.map((entry,i)=>{
-  const size=spans[i]*scale;
-  const item={sourceId:entry.id,title:entry.title,state:entry.state,x:x+size/2,y:76,size,yaw:Math.round(entry.state.yaw*180/Math.PI)};
-  x+=size;return item;
- });
+ return models.map(entry=>({
+  sourceId:entry.id,title:entry.title,state:entry.state,
+  x:0,z:0,lift:0,scale:1,yaw:Math.round(entry.state.yaw*180/Math.PI),
+  tilt:entry.state.mode==='model'?90:0,roll:0
+ }));
 }
 
-let scene=null,sceneAssets=new Map(),sceneFrame,sceneHits=[],sceneDrag=null;
-const sceneInputs=new Map();
+let scene=null,sceneAssets=new Map(),sceneFrame,sceneHits=[],sceneDrag=null,sceneSelected=null,sceneInputs={};
 const scenePreview=$('scenePreview');
 const sceneModel=$('sceneModel');
 const sceneAdd=$('sceneAdd');
+const sceneDialog=$('sceneDialog');
 
 function populateSceneModels(models){
  const entries=newest(models).filter(entry=>entry.state.mode!=='photo');
@@ -1399,58 +1396,138 @@ function populateSceneModels(models){
  sceneModel.disabled=sceneAdd.disabled=!entries.length;
 }
 async function decodeSceneItem(item){
- return new Map(await Promise.all(item.state.layers.map(async layer=>[layer.art,await img(layer.art)])));
+ const sources=new Set(item.state.layers.map(layer=>layer.art));
+ return new Map(await Promise.all([...sources].map(async src=>[src,await img(src)])));
+}
+function geometry(item){return sceneTile(item,420).geometry}
+function fitSceneFrame(){scene.frame=fitScene(scene.items,geometry)}
+function autoArrange(){
+ arrangeScene(scene.items,geometry);
+ fitSceneFrame();syncSceneInputs();queueScene();
 }
 async function openScene(entry){
  const draft=structuredClone(entry);
+ const needsLayout=!draft.frame;
+ if(needsLayout&&draft.items.some(item=>item.z===undefined)){
+  draft.items=draft.items.map(item=>({...layoutModels([{id:item.sourceId,title:item.title,state:item.state}])[0],yaw:item.yaw}));
+ }
  const [decoded,models]=await Promise.all([Promise.all(draft.items.map(decodeSceneItem)),list('models')]);
  sceneDrag=null;sceneHits=[];
  scene=draft;sceneAssets=new Map(draft.items.map((item,i)=>[item,{images:decoded[i]}]));
- $('sceneForm').elements.title.value=scene.title;
- $('sceneBackground').value=scene.background;
- $('sceneLight').value=scene.light;
- $('sceneTransparent').checked=scene.transparent;
- $('sceneStatus').textContent='';populateSceneModels(models);
+ sceneSelected=draft.items[0];
+ $('sceneForm').elements.title.value=draft.title;
+ $('sceneBackground').value=draft.background;
+ $('sceneLight').value=draft.light;
+ $('sceneTransparent').checked=draft.transparent;
+ populateSceneModels(models);
+ if(needsLayout)autoArrange();
  renderSceneControls();
  $('collectionDialog').close();
- $('sceneDialog').showModal();queueScene();
+ if(!sceneDialog.open)sceneDialog.showModal();
+ queueScene();
+}
+function syncSceneInputs(){
+ if(!sceneSelected)return;
+ for(const [key,input] of Object.entries(sceneInputs))input.value=Math.round(sceneSelected[key]*(key==='scale'?100:1));
+}
+function selectSceneItem(item){
+ if(sceneSelected===item)return;
+ sceneSelected=item;renderSceneControls();queueScene();
+}
+function canPlace(item,bounds){
+ return scene.items.every(other=>other===item||!overlaps(bounds,sceneBounds(other,geometry(other)),1));
+}
+function updatePose(item,changes){
+ const before=Object.fromEntries(Object.keys(changes).map(key=>[key,item[key]]));
+ Object.assign(item,changes);
+ if(!canPlace(item,sceneBounds(item,geometry(item)))){
+  Object.assign(item,before);
+  return false;
+ }
+ return true;
+}
+function nextFreePosition(item,where={}){
+ const candidate={...item,...where};
+ const shape=geometry(item),step=24;
+ const initial=sceneBounds(candidate,shape);
+ if(canPlace(item,initial))return {x:candidate.x,z:candidate.z,lift:candidate.lift};
+ for(let ring=1;ring<=12;ring++){
+  for(const [dx,dz] of [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,1],[1,-1],[-1,-1]]){
+   const x=candidate.x+dx*step*ring,z=candidate.z+dz*step*ring;
+   if(canPlace(item,sceneBounds({...candidate,x,z},shape)))return {x,z,lift:candidate.lift};
+  }
+ }
+ const right=Math.max(...scene.items.filter(other=>other!==item).map(other=>sceneBounds(other,geometry(other)).right));
+ return {x:right-shape.min[0]*item.scale+16,z:candidate.z,lift:candidate.lift};
+}
+function seatOnSurface(item){
+ const destination=nextFreePosition(item,{lift:0});
+ const moved=destination.x!==item.x||destination.z!==item.z;
+ Object.assign(item,destination);
+ if(moved)fitSceneFrame();
+ syncSceneInputs();queueScene();
+ if(moved)$('sceneStatus').textContent='Изделие поставлено рядом на свободное место.';
 }
 function renderSceneControls(){
- const controls=$('sceneItems');
- controls.replaceChildren();sceneInputs.clear();
+ const controls=$('sceneItems'),list=$('sceneObjectList');
+ controls.replaceChildren();list.replaceChildren();sceneInputs={};
  for(const item of scene.items){
-  const fieldset=document.createElement('fieldset'),legend=document.createElement('legend');
-  const inputs={};sceneInputs.set(item,inputs);
-  legend.textContent=item.title;fieldset.append(legend);
-  for(const [key,title,min,max] of [['x','X, %',0,100],['y','Y, %',0,100],['size','Размер, %',1,100],['yaw','Поворот, °',-360,360]]){
-   const label=document.createElement('label'),input=document.createElement('input');
-   inputs[key]=input;input.type='number';input.min=min;input.max=max;input.value=Math.round(item[key]);
-   input.oninput=()=>{
-    if(input.value==='')return;
-    item[key]=clamp(+input.value,min,max);queueScene();
-   };
-   input.onchange=()=>{input.value=Math.round(item[key])};
-   label.append(title,input);fieldset.append(label);
-  }
-  const refresh=button('Обновить из модели',async()=>{
-   const draft=scene;
-   const entry=(await list('models')).find(model=>model.id===item.sourceId);
-   if(!entry)throw Error('Исходная модель недоступна');
-   const decoded=await decodeSceneItem(entry);
-   if(scene!==draft||!draft.items.includes(item)||!$('sceneDialog').open)return;
-   item.state=entry.state;item.title=entry.title;
-   sceneAssets.set(item,{images:decoded});
-   renderSceneControls();queueScene();
-  });
-  const remove=button('Убрать из сцены',()=>{
-   if(scene.items.length<2)return;
-   scene.items=scene.items.filter(placed=>placed!==item);
-   sceneAssets.delete(item);
-   renderSceneControls();queueScene();
-  });
-  remove.disabled=scene.items.length<2;
-  fieldset.append(refresh,remove);controls.append(fieldset);
+  const select=button(item.title,()=>{selectSceneItem(item);list.querySelector('[aria-pressed="true"]').focus()});
+  select.setAttribute('aria-pressed',String(item===sceneSelected));list.append(select);
  }
+ const item=sceneSelected;
+ if(!item)return;
+ const fieldset=document.createElement('fieldset'),legend=document.createElement('legend');
+ legend.textContent=item.title;fieldset.append(legend);
+ const settings=[
+  ['x','Вправо, мм',-100000,100000],['z','Вперёд, мм',-100000,100000],['lift','Высота над поверхностью, мм',0,2000],
+  ['yaw','Поворот, °',-180,180],['tilt','Наклон, °',-180,180],['roll','Крен, °',-180,180],['scale','Масштаб, %',10,300]
+ ];
+ for(const [key,title,min,max] of settings){
+  const label=document.createElement('label'),input=document.createElement('input');
+  sceneInputs[key]=input;input.type='number';input.min=min;input.max=max;
+  input.onchange=()=>{
+   const proposed=input.valueAsNumber;
+   if(!Number.isFinite(proposed)){syncSceneInputs();return}
+   const value=clamp(proposed,min,max)/(key==='scale'?100:1);
+   const applied=updatePose(item,{[key]:value});
+   syncSceneInputs();queueScene();
+   if(!applied)$('sceneStatus').textContent='Здесь мешает соседнее изделие.';
+  };
+  label.append(title,input);fieldset.append(label);
+ }
+ const actions=document.createElement('div');actions.className='sceneTools';
+ actions.append(
+  button('Поставить на поверхность',()=>seatOnSurface(item)),
+  button('Повернуть на 90°',()=>{
+   const yaw=((item.yaw+270)%360+360)%360-180;
+   const applied=updatePose(item,{yaw});
+   syncSceneInputs();queueScene();
+   if(!applied)$('sceneStatus').textContent='Для поворота нужно больше места.';
+  })
+ );
+ if(item.state.mode==='model')actions.append(button('Положить',()=>{
+  Object.assign(item,{tilt:90,roll:0});seatOnSurface(item);
+ }));
+ actions.append(button('Обновить из модели',async()=>{
+  const draft=scene;
+  const entry=(await list('models')).find(model=>model.id===item.sourceId);
+  if(!entry)throw Error('Исходная модель недоступна');
+  const decoded=await decodeSceneItem(entry);
+  if(scene!==draft||!draft.items.includes(item)||!sceneDialog.open)return;
+  item.state=entry.state;item.title=entry.title;
+  sceneAssets.set(item,{images:decoded});
+  Object.assign(item,nextFreePosition(item));fitSceneFrame();
+  renderSceneControls();queueScene();
+ }));
+ const remove=button('Убрать из сцены',()=>{
+  if(scene.items.length<2)return;
+  scene.items=scene.items.filter(placed=>placed!==item);sceneAssets.delete(item);
+  sceneSelected=scene.items[0];renderSceneControls();queueScene();
+ });
+ remove.disabled=scene.items.length<2;actions.append(remove);
+ fieldset.append(actions);controls.append(fieldset);
+ syncSceneInputs();
 }
 sceneAdd.onclick=()=>task(async()=>{
  const draft=scene,id=sceneModel.value;
@@ -1458,34 +1535,23 @@ sceneAdd.onclick=()=>task(async()=>{
  try{
   const entry=(await list('models')).find(model=>model.id===id);
   if(!entry)throw Error('Модель недоступна');
-  const decoded=await decodeSceneItem(entry);
-  if(scene!==draft||!$('sceneDialog').open)return;
-  const reference=draft.items[0];
-  const size=clamp(sceneSpan(entry.state)*reference.size/sceneSpan(reference.state),1,42);
-  const item={sourceId:id,title:entry.title,state:entry.state,x:50,y:68,size,yaw:Math.round(entry.state.yaw*180/Math.PI)};
-  draft.items.push(item);sceneAssets.set(item,{images:decoded});
-  renderSceneControls();queueScene();sceneInputs.get(item).x.focus();
+  const [item]=layoutModels([entry]);
+  const decoded=await decodeSceneItem(item);
+  if(scene!==draft||!sceneDialog.open)return;
+  sceneAssets.set(item,{images:decoded});
+  Object.assign(item,nextFreePosition(item,{x:sceneSelected.x,z:sceneSelected.z,lift:0}));
+  draft.items.push(item);sceneSelected=item;fitSceneFrame();
+  renderSceneControls();queueScene();sceneInputs.x.focus();
  }finally{if(scene===draft)sceneAdd.disabled=!sceneModel.value}
 });
+$('sceneAuto').onclick=()=>task(autoArrange);
+$('sceneFit').onclick=()=>task(()=>{fitSceneFrame();queueScene()});
 
-function scenePixelsPerMm(state,resolution){
- if(state.mode==='model')return resolution/274;
- if(state.mode==='mug')return mugView(resolution,resolution,{zoom:.8,pitch:-.27,yaw:0}).scale;
- if(state.mode==='bag'){
-  const {width,height,depth,loop}=bagFormats[state.bagFormat];
-  return resolution/Math.max(width+depth+90,height+loop+95);
- }
- let span=merch[state.mode].span;
- if(isCartonMode(state.mode)){
-  const {width,depth,height}=cartonSize(state.carton);
-  span=Math.max(Math.hypot(width,depth),height+depth)*1.14;
- }
- return resolution/(span*1.13);
-}
 function sceneTile(item,resolution){
  const cache=sceneAssets.get(item);
- const key=[item.yaw,scene.light,resolution].join('/');
+ const key=[item.yaw,item.tilt,item.roll,scene.light,resolution].join('/');
  if(cache.key===key)return cache;
+ const pose=createScenePose(item.yaw,item.tilt,item.roll,resolution,sceneSpan(item.state));
  const tile=document.createElement('canvas');
  tile.width=tile.height=resolution;
  const target=tile.getContext('2d',{willReadFrequently:true});
@@ -1493,7 +1559,7 @@ function sceneTile(item,resolution){
  try{
   layers=item.state.layers;active=item.state.active;images=cache.images;
   const layer=layers[active]||fresh(item.state.mode);
-  s={...fresh(item.state.mode),...item.state,...layerData(layer),zoom:1,yaw:item.yaw*Math.PI/180,pitch:-.27,background:'',studioLight:scene.light};
+  s={...fresh(item.state.mode),...item.state,...layerData(layer),zoom:1,yaw:item.yaw*Math.PI/180,pitch:-cameraAngle,roll:0,scenePose:pose,background:'',studioLight:scene.light};
   art=images.get(s.art)||null;bitmap=null;
   paint(target,resolution,resolution,true,true);
  }finally{
@@ -1506,21 +1572,65 @@ function sceneTile(item,resolution){
   left=Math.min(left,x);right=Math.max(right,x);top=Math.min(top,y);bottom=Math.max(bottom,y);
  }
  const bounds=[Math.max(0,left-5),Math.max(0,top-5),Math.min(resolution,right+6),Math.min(resolution,bottom+6)];
- return Object.assign(cache,{key,tile,bounds,pixels:resolution===420?data:null});
+ const geometry=floorGeometry(pose.groups);
+ const result={key,tile,bounds,pixels:resolution===420?data:null,geometry,pose};
+ if(resolution===420)Object.assign(cache,result);
+ return result;
 }
 function paintScene(canvas,transparent,resolution,hitAreas){
- const t=canvas.getContext('2d'),{width,height}=canvas;
- t.clearRect(0,0,width,height);
- if(!transparent){t.fillStyle=scene.background;t.fillRect(0,0,width,height)}
- t.imageSmoothingQuality='high';
- for(const item of [...scene.items].sort((a,b)=>a.y-b.y)){
-  const {tile,pixels,bounds:[left,top,right,bottom]}=sceneTile(item,resolution);
+ const ctx=canvas.getContext('2d'),{width,height}=canvas;
+ const zoom=width/scene.frame.width,centerX=width/2-scene.frame.x*zoom,centerY=height/2-scene.frame.y*zoom;
+ const floor=(x,z)=>[centerX+x*zoom,centerY+z*floorSlope*zoom];
+ ctx.clearRect(0,0,width,height);
+ if(!transparent){
+  ctx.fillStyle=scene.background;ctx.fillRect(0,0,width,height);
+  const light=ctx.createLinearGradient(0,0,0,height);
+  light.addColorStop(0,'rgba(255,255,255,.29)');light.addColorStop(1,'rgba(0,0,0,.07)');
+  ctx.fillStyle=light;ctx.fillRect(0,0,width,height);
+ }
+ const placements=scene.items.map(item=>({item,render:sceneTile(item,resolution)}));
+ const shadowStrength=.38*(scene.light/100);
+ for(const {item,render} of placements){
+  const {shadow,contact}=render.geometry;
+  function drawShadow(outlines,blur,opacity,offsetX=0,offsetZ=0){
+   ctx.save();ctx.beginPath();
+   for(const outline of outlines){
+    outline.forEach(([x,z],index)=>ctx[index?'lineTo':'moveTo'](...floor(item.x+x*item.scale+offsetX,item.z+z*item.scale+offsetZ)));
+    ctx.closePath();
+   }
+   ctx.filter='blur('+Math.max(.7,blur*zoom)+'px)';
+   ctx.globalAlpha=opacity;ctx.fillStyle='#191811';ctx.fill();ctx.restore();
+  }
+  drawShadow(shadow,4+item.lift*.10,shadowStrength/ (1+item.lift/170),.33*item.lift,.20*item.lift);
+  if(item.lift<4&&contact.length>=3)drawShadow([contact],1.8,.26*(1-item.lift/4));
+ }
+ ctx.imageSmoothingQuality='high';
+ // Place the rear silhouettes before the foreground silhouettes.
+ placements.sort((a,b)=>{
+  const depth=({item,render})=>{
+   const b=sceneBounds(item,render.geometry);
+   return ((b.back+b.front)*verticalScale+(b.bottom+b.top)*floorSlope)/2;
+  };
+  return depth(a)-depth(b);
+ });
+ for(const {item,render} of placements){
+  const {tile,pose,pixels,bounds:[left,top,right,bottom]}=render;
   const w=right-left,h=bottom-top;
   if(w<=0||h<=0)continue;
-  const scale=width*item.size/100/sceneSpan(item.state)/scenePixelsPerMm(item.state,resolution);
-  const x=width*item.x/100+(left-resolution/2)*scale,y=height*item.y/100-h*scale;
-  t.drawImage(tile,left,top,w,h,x,y,w*scale,h*scale);
+  const scale=zoom*item.scale/pose.scale;
+  const [baseX,baseY]=floor(item.x,item.z);
+  const x=baseX+(left-pose.origin)*scale;
+  const y=baseY-(item.lift+render.geometry.max[1]*item.scale)*verticalScale*zoom+(top-pose.origin)*scale;
+  ctx.drawImage(tile,left,top,w,h,x,y,w*scale,h*scale);
   if(hitAreas)hitAreas.push({item,x,y,w,h,scale,left,top,pixels,resolution});
+ }
+ if(hitAreas){
+  const selected=hitAreas.find(hit=>hit.item===sceneSelected);
+  if(selected){
+   ctx.save();ctx.strokeStyle='#00877a';ctx.lineWidth=1.5;ctx.setLineDash([5,4]);
+   ctx.strokeRect(selected.x-4,selected.y-4,selected.w*selected.scale+8,selected.h*selected.scale+8);
+   ctx.restore();
+  }
  }
 }
 function queueScene(){
@@ -1549,8 +1659,9 @@ function pickSceneItem(x,y){
 scenePreview.onpointerdown=event=>{
  if(sceneDrag||event.button!==0)return;
  const [x,y]=scenePoint(event),item=pickSceneItem(x,y);
- if(!item||!sceneInputs.has(item))return;
- sceneDrag={item,id:event.pointerId,x,y,startX:item.x,startY:item.y};
+ if(!item)return;
+ selectSceneItem(item);
+ sceneDrag={item,id:event.pointerId,x,y,startX:item.x,startZ:item.z};
  scenePreview.setPointerCapture(event.pointerId);scenePreview.style.cursor='grabbing';
 };
 scenePreview.onpointermove=event=>{
@@ -1560,12 +1671,15 @@ scenePreview.onpointermove=event=>{
   return;
  }
  if(sceneDrag.id!==event.pointerId)return;
- const {item,startX,startY}=sceneDrag;
- item.x=clamp(startX+100*(x-sceneDrag.x)/scenePreview.width,0,100);
- item.y=clamp(startY+100*(y-sceneDrag.y)/scenePreview.height,0,100);
- const fields=sceneInputs.get(item);
- if(fields){fields.x.value=Math.round(item.x);fields.y.value=Math.round(item.y)}
- queueScene();
+ const {item,startX,startZ}=sceneDrag;
+ const units=scene.frame.width/scenePreview.width;
+ const nextX=startX+(x-sceneDrag.x)*units,nextZ=startZ+(y-sceneDrag.y)*units/floorSlope;
+ const applied=updatePose(item,{x:nextX,z:nextZ});
+ if(!applied){
+  $('sceneStatus').textContent='Здесь мешает соседнее изделие.';
+  return;
+ }
+ syncSceneInputs();queueScene();
 };
 scenePreview.onlostpointercapture=()=>{
  sceneDrag=null;scenePreview.style.cursor='';
