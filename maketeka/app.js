@@ -1,4 +1,4 @@
-import {arrangeScene,cameraAngle,createScenePose,fitScene,floorGeometry,floorSlope,overlaps,sceneBounds,verticalScale} from './scene-geometry.js';
+import {arrangeScene,createScenePose,defaultCamera,fitScene,floorGeometry,overlaps,sceneBounds,sceneCamera} from './scene-geometry.js?v=sceneCamera1';
 import {list,put} from './collection.js';
 import {chooseCrop,cropPixels,dragCrop,exportCrop,validCrop} from './crop.js?v=sceneCrop1';
 import {cartonAllowsGloss,cartonMaterials,cartonPrintFaces,cartonSize,cartonThicknessPresets,freshCarton,isCartonMode,normalizeCarton} from './carton.js?v=magneticCenter1';
@@ -439,12 +439,17 @@ let merchView=null,merchAtlasCache;
 function paintProduct(t,w,h,items,output,transparentBackdrop){
  const spec=merch[s.mode];
  const faces=isCartonMode(s.mode)?cartonPrintFaces(s.carton):{front:spec,back:spec};
- const key=JSON.stringify([s.mode,faces,...items.map(l=>[l.name,l.bagSide,l.bothSides,l.x,l.y,l.angle,l.width,l.ink,l.opacity,l.method,l.intensity])]);
- const sources=items.map(l=>images.get(l.art));
- let atlas=merchAtlasCache?.atlas;
- if(output||!atlas||key!==merchAtlasCache.key||sources.some((img,i)=>img!==merchAtlasCache.sources[i])){
-  atlas=merchAtlases(faces,items,l=>layerBitmap(l,images.get(l.art),output),output&&(!s.scenePose||w>420)?3508:1024);
-  if(!output)merchAtlasCache={key,sources,atlas};
+ const previewAsset=s.scenePose?.previewAsset;
+ let atlas=previewAsset?.atlas;
+ if(!atlas){
+  const key=JSON.stringify([s.mode,faces,...items.map(l=>[l.name,l.bagSide,l.bothSides,l.x,l.y,l.angle,l.width,l.ink,l.opacity,l.method,l.intensity])]);
+  const sources=items.map(l=>images.get(l.art));
+  atlas=merchAtlasCache?.atlas;
+  if(output||!atlas||key!==merchAtlasCache.key||sources.some((img,i)=>img!==merchAtlasCache.sources[i])){
+   atlas=merchAtlases(faces,items,l=>layerBitmap(l,images.get(l.art),output),output&&!previewAsset?3508:1024);
+   if(previewAsset)previewAsset.atlas=atlas;
+   else if(!output)merchAtlasCache={key,sources,atlas};
+  }
  }
  const tiles=drawMerch(t,w,h,{...s,transparentBackdrop},atlas);
  if(output)return;
@@ -1380,7 +1385,7 @@ function layoutModels(models){
  }));
 }
 
-let scene=null,sceneAssets=new Map(),sceneFrame,sceneHits=[],sceneDrag=null,sceneSelected=null,sceneInputs={};
+let scene=null,sceneAssets=new Map(),sceneFrame,sceneHits=[],sceneDrag=null,sceneSelected=null,sceneInputs={},sceneSpinValue,sceneMoveMode='object';
 const scenePreview=$('scenePreview');
 const sceneModel=$('sceneModel');
 const sceneAdd=$('sceneAdd');
@@ -1399,8 +1404,33 @@ async function decodeSceneItem(item){
  const sources=new Set(item.state.layers.map(layer=>layer.art));
  return new Map(await Promise.all([...sources].map(async src=>[src,await img(src)])));
 }
-function geometry(item){return sceneTile(item,420).geometry}
-function fitSceneFrame(){scene.frame=fitScene(scene.items,geometry)}
+function orientationKey(item){return [item.yaw,item.tilt,item.roll].join('/')}
+function geometry(item){
+ const cache=sceneAssets.get(item);
+ return cache.shape?.key===orientationKey(item)?cache.shape.geometry:sceneTile(item,420).geometry;
+}
+function fitSceneFrame(){scene.frame=fitScene(scene.items,geometry,scene.camera)}
+const cameraFields={azimuth:$('sceneAzimuth'),elevation:$('sceneElevation'),zoom:$('sceneCameraZoom')};
+function syncCamera(){
+ for(const [key,input] of Object.entries(cameraFields)){
+  input.value=scene.camera[key];
+  input.setAttribute('aria-valuetext',Math.round(scene.camera[key])+(key==='zoom'?'%':'°'));
+ }
+}
+for(const [key,input] of Object.entries(cameraFields))input.oninput=()=>{
+ scene.camera[key]=input.valueAsNumber;syncCamera();queueScene();
+};
+function sceneMode(mode){
+ sceneMoveMode=mode;
+ $('sceneMoveObject').setAttribute('aria-pressed',String(mode==='object'));
+ $('sceneMoveCamera').setAttribute('aria-pressed',String(mode==='camera'));
+ scenePreview.style.cursor=mode==='camera'?'grab':'';
+}
+$('sceneMoveObject').onclick=()=>sceneMode('object');
+$('sceneMoveCamera').onclick=()=>sceneMode('camera');
+$('sceneResetCamera').onclick=()=>task(()=>{
+ scene.camera={...defaultCamera};syncCamera();fitSceneFrame();queueScene();
+});
 function autoArrange(){
  arrangeScene(scene.items,geometry);
  fitSceneFrame();syncSceneInputs();queueScene();
@@ -1413,6 +1443,7 @@ async function openScene(entry){
  }
  const [decoded,models]=await Promise.all([Promise.all(draft.items.map(decodeSceneItem)),list('models')]);
  sceneDrag=null;sceneHits=[];
+ draft.camera={...defaultCamera,...draft.camera};
  scene=draft;sceneAssets=new Map(draft.items.map((item,i)=>[item,{images:decoded[i]}]));
  sceneSelected=draft.items[0];
  $('sceneForm').elements.title.value=draft.title;
@@ -1421,7 +1452,8 @@ async function openScene(entry){
  $('sceneTransparent').checked=draft.transparent;
  populateSceneModels(models);
  if(needsLayout)autoArrange();
- renderSceneControls();
+ else if(!draft.frame.target)fitSceneFrame();
+ sceneMode('object');syncCamera();renderSceneControls();
  $('collectionDialog').close();
  if(!sceneDialog.open)sceneDialog.showModal();
  queueScene();
@@ -1429,6 +1461,7 @@ async function openScene(entry){
 function syncSceneInputs(){
  if(!sceneSelected)return;
  for(const [key,input] of Object.entries(sceneInputs))input.value=Math.round(sceneSelected[key]*(key==='scale'?100:1));
+ if(sceneSpinValue)sceneSpinValue.textContent=Math.round(sceneSelected.yaw)+'°';
 }
 function selectSceneItem(item){
  if(sceneSelected===item)return;
@@ -1470,7 +1503,7 @@ function seatOnSurface(item){
 }
 function renderSceneControls(){
  const controls=$('sceneItems'),list=$('sceneObjectList');
- controls.replaceChildren();list.replaceChildren();sceneInputs={};
+ controls.replaceChildren();list.replaceChildren();sceneInputs={};sceneSpinValue=null;
  for(const item of scene.items){
   const select=button(item.title,()=>{selectSceneItem(item);list.querySelector('[aria-pressed="true"]').focus()});
   select.setAttribute('aria-pressed',String(item===sceneSelected));list.append(select);
@@ -1479,9 +1512,20 @@ function renderSceneControls(){
  if(!item)return;
  const fieldset=document.createElement('fieldset'),legend=document.createElement('legend');
  legend.textContent=item.title;fieldset.append(legend);
+ const spinLabel=document.createElement('label'),spin=document.createElement('input');
+ sceneSpinValue=document.createElement('output');spinLabel.className='sceneSpin';
+ spin.type='range';spin.min=-180;spin.max=180;spin.step=1;
+ spin.setAttribute('aria-label','Вращение вокруг своей оси');
+ sceneInputs.yaw=spin;
+ spin.oninput=()=>{
+  const applied=updatePose(item,{yaw:spin.valueAsNumber});
+  syncSceneInputs();queueScene();
+  if(!applied)$('sceneStatus').textContent='Для поворота нужно больше места.';
+ };
+ spinLabel.append('Вращение вокруг своей оси · ',sceneSpinValue,spin);fieldset.append(spinLabel);
  const settings=[
   ['x','Вправо, мм',-100000,100000],['z','Вперёд, мм',-100000,100000],['lift','Высота над поверхностью, мм',0,2000],
-  ['yaw','Поворот, °',-180,180],['tilt','Наклон, °',-180,180],['roll','Крен, °',-180,180],['scale','Масштаб, %',10,300]
+  ['tilt','Наклон, °',-180,180],['roll','Крен, °',-180,180],['scale','Масштаб, %',10,300]
  ];
  for(const [key,title,min,max] of settings){
   const label=document.createElement('label'),input=document.createElement('input');
@@ -1545,13 +1589,17 @@ sceneAdd.onclick=()=>task(async()=>{
  }finally{if(scene===draft)sceneAdd.disabled=!sceneModel.value}
 });
 $('sceneAuto').onclick=()=>task(autoArrange);
-$('sceneFit').onclick=()=>task(()=>{fitSceneFrame();queueScene()});
+$('sceneFit').onclick=()=>task(()=>{scene.camera.zoom=100;syncCamera();fitSceneFrame();queueScene()});
 
 function sceneTile(item,resolution){
  const cache=sceneAssets.get(item);
- const key=[item.yaw,item.tilt,item.roll,scene.light,resolution].join('/');
+ const shapeKey=orientationKey(item);
+ const key=[shapeKey,scene.camera.azimuth,scene.camera.elevation,scene.light,resolution].join('/');
  if(cache.key===key)return cache;
- const pose=createScenePose(item.yaw,item.tilt,item.roll,resolution,sceneSpan(item.state));
+ const pose=createScenePose(item.yaw,item.tilt,item.roll,resolution,sceneSpan(item.state),scene.camera);
+ const preview=resolution<=420;
+ if(preview)pose.previewAsset=cache;
+ if(cache.shape?.key===shapeKey)pose.record=()=>{};
  const tile=document.createElement('canvas');
  tile.width=tile.height=resolution;
  const target=tile.getContext('2d',{willReadFrequently:true});
@@ -1559,7 +1607,7 @@ function sceneTile(item,resolution){
  try{
   layers=item.state.layers;active=item.state.active;images=cache.images;
   const layer=layers[active]||fresh(item.state.mode);
-  s={...fresh(item.state.mode),...item.state,...layerData(layer),zoom:1,yaw:item.yaw*Math.PI/180,pitch:-cameraAngle,roll:0,scenePose:pose,background:'',studioLight:scene.light};
+  s={...fresh(item.state.mode),...item.state,...layerData(layer),zoom:1,yaw:item.yaw*Math.PI/180,pitch:-scene.camera.elevation*Math.PI/180,roll:0,scenePose:pose,background:'',studioLight:scene.light};
   art=images.get(s.art)||null;bitmap=null;
   paint(target,resolution,resolution,true,true);
  }finally{
@@ -1572,15 +1620,21 @@ function sceneTile(item,resolution){
   left=Math.min(left,x);right=Math.max(right,x);top=Math.min(top,y);bottom=Math.max(bottom,y);
  }
  const bounds=[Math.max(0,left-5),Math.max(0,top-5),Math.min(resolution,right+6),Math.min(resolution,bottom+6)];
- const geometry=floorGeometry(pose.groups);
- const result={key,tile,bounds,pixels:resolution===420?data:null,geometry,pose};
- if(resolution===420)Object.assign(cache,result);
+ const geometry=cache.shape?.key===shapeKey?cache.shape.geometry:floorGeometry(pose.groups);
+ pose.groups.length=0;delete pose.previewAsset;
+ const result={key,tile,bounds,pixels:preview?data:null,geometry,pose};
+ if(preview)Object.assign(cache,result,{shape:{key:shapeKey,geometry}});
  return result;
 }
 function paintScene(canvas,transparent,resolution,hitAreas){
  const ctx=canvas.getContext('2d'),{width,height}=canvas;
- const zoom=width/scene.frame.width,centerX=width/2-scene.frame.x*zoom,centerY=height/2-scene.frame.y*zoom;
- const floor=(x,z)=>[centerX+x*zoom,centerY+z*floorSlope*zoom];
+ const {view}=sceneCamera(scene.camera);
+ const [targetX,targetY]=view(...scene.frame.target),zoom=width/scene.frame.width*scene.camera.zoom/100;
+ const centerX=width/2-targetX*zoom,centerY=height/2-targetY*zoom;
+ const project=(x,y,z)=>{
+  const [px,py]=view(x,y,z);
+  return [centerX+px*zoom,centerY+py*zoom];
+ };
  ctx.clearRect(0,0,width,height);
  if(!transparent){
   ctx.fillStyle=scene.background;ctx.fillRect(0,0,width,height);
@@ -1595,7 +1649,7 @@ function paintScene(canvas,transparent,resolution,hitAreas){
   function drawShadow(outlines,blur,opacity,offsetX=0,offsetZ=0){
    ctx.save();ctx.beginPath();
    for(const outline of outlines){
-    outline.forEach(([x,z],index)=>ctx[index?'lineTo':'moveTo'](...floor(item.x+x*item.scale+offsetX,item.z+z*item.scale+offsetZ)));
+    outline.forEach(([x,z],index)=>ctx[index?'lineTo':'moveTo'](...project(item.x+x*item.scale+offsetX,0,item.z+z*item.scale+offsetZ)));
     ctx.closePath();
    }
    ctx.filter='blur('+Math.max(.7,blur*zoom)+'px)';
@@ -1609,7 +1663,7 @@ function paintScene(canvas,transparent,resolution,hitAreas){
  placements.sort((a,b)=>{
   const depth=({item,render})=>{
    const b=sceneBounds(item,render.geometry);
-   return ((b.back+b.front)*verticalScale+(b.bottom+b.top)*floorSlope)/2;
+   return view((b.left+b.right)/2,-(b.bottom+b.top)/2,(b.back+b.front)/2)[2];
   };
   return depth(a)-depth(b);
  });
@@ -1618,9 +1672,8 @@ function paintScene(canvas,transparent,resolution,hitAreas){
   const w=right-left,h=bottom-top;
   if(w<=0||h<=0)continue;
   const scale=zoom*item.scale/pose.scale;
-  const [baseX,baseY]=floor(item.x,item.z);
-  const x=baseX+(left-pose.origin)*scale;
-  const y=baseY-(item.lift+render.geometry.max[1]*item.scale)*verticalScale*zoom+(top-pose.origin)*scale;
+  const [baseX,baseY]=project(item.x,-(item.lift+render.geometry.max[1]*item.scale),item.z);
+  const x=baseX+(left-pose.origin)*scale,y=baseY+(top-pose.origin)*scale;
   ctx.drawImage(tile,left,top,w,h,x,y,w*scale,h*scale);
   if(hitAreas)hitAreas.push({item,x,y,w,h,scale,left,top,pixels,resolution});
  }
@@ -1639,7 +1692,7 @@ function queueScene(){
  sceneFrame=requestAnimationFrame(()=>{
   if(!$('sceneDialog').open)return;
   sceneHits=[];
-  task(()=>paintScene(scenePreview,scene.transparent,420,sceneHits));
+  task(()=>paintScene(scenePreview,scene.transparent,sceneDrag&&!sceneDrag.item?280:420,sceneHits));
  });
 }
 function scenePoint(event){
@@ -1658,23 +1711,34 @@ function pickSceneItem(x,y){
 }
 scenePreview.onpointerdown=event=>{
  if(sceneDrag||event.button!==0)return;
- const [x,y]=scenePoint(event),item=pickSceneItem(x,y);
- if(!item)return;
- selectSceneItem(item);
- sceneDrag={item,id:event.pointerId,x,y,startX:item.x,startZ:item.z};
+ const [x,y]=scenePoint(event);
+ if(sceneMoveMode==='camera'){
+  sceneDrag={id:event.pointerId,x,y,azimuth:scene.camera.azimuth,elevation:scene.camera.elevation};
+ }else{
+  const item=pickSceneItem(x,y);
+  if(!item)return;
+  selectSceneItem(item);
+  sceneDrag={item,id:event.pointerId,x,y,startX:item.x,startZ:item.z};
+ }
  scenePreview.setPointerCapture(event.pointerId);scenePreview.style.cursor='grabbing';
 };
 scenePreview.onpointermove=event=>{
  const [x,y]=scenePoint(event);
  if(!sceneDrag){
-  scenePreview.style.cursor=pickSceneItem(x,y)?'grab':'';
+  scenePreview.style.cursor=sceneMoveMode==='camera'||pickSceneItem(x,y)?'grab':'';
   return;
  }
  if(sceneDrag.id!==event.pointerId)return;
- const {item,startX,startZ}=sceneDrag;
- const units=scene.frame.width/scenePreview.width;
- const nextX=startX+(x-sceneDrag.x)*units,nextZ=startZ+(y-sceneDrag.y)*units/floorSlope;
- const applied=updatePose(item,{x:nextX,z:nextZ});
+ const {item,startX,startZ}=sceneDrag,dx=x-sceneDrag.x,dy=y-sceneDrag.y;
+ if(!item){
+  const turn=sceneDrag.azimuth-dx*180/scenePreview.width;
+  scene.camera.azimuth=((turn+180)%360+360)%360-180;
+  scene.camera.elevation=clamp(sceneDrag.elevation+dy*90/scenePreview.height,10,80);
+  syncCamera();queueScene();return;
+ }
+ const units=scene.frame.width/scenePreview.width*100/scene.camera.zoom;
+ const [moveX,moveZ]=sceneCamera(scene.camera).surfaceDelta(dx*units,dy*units);
+ const applied=updatePose(item,{x:startX+moveX,z:startZ+moveZ});
  if(!applied){
   $('sceneStatus').textContent='Здесь мешает соседнее изделие.';
   return;
@@ -1682,7 +1746,9 @@ scenePreview.onpointermove=event=>{
  syncSceneInputs();queueScene();
 };
 scenePreview.onlostpointercapture=()=>{
- sceneDrag=null;scenePreview.style.cursor='';
+ const cameraMoved=sceneDrag&&!sceneDrag.item;
+ sceneDrag=null;scenePreview.style.cursor=sceneMoveMode==='camera'?'grab':'';
+ if(cameraMoved)queueScene();
 };
 $('sceneBackground').oninput=e=>{scene.background=e.target.value;queueScene()};
 $('sceneLight').oninput=e=>{scene.light=+e.target.value;queueScene()};

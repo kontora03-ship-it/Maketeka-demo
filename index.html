@@ -1,4 +1,4 @@
-<!doctype html><html lang="ru"><head><meta name="robots" content="noindex, nofollow, noimageindex"><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#000000"><title>maketeka — студия мокапов</title><link rel="stylesheet" href="/Maketeka-demo/maketeka/ui.css?v=sceneGround1"></head><body>
+<!doctype html><html lang="ru"><head><meta name="robots" content="noindex, nofollow, noimageindex"><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#000000"><title>maketeka — студия мокапов</title><link rel="stylesheet" href="/Maketeka-demo/maketeka/ui.css?v=sceneCamera1"></head><body>
 <header><button id="home" class="brand" aria-label="maketeka — на главную"><img src="/Maketeka-demo/maketeka/assets/brand.svg?v=20261122" alt="maketeka"></button><span class="sep"></span><span id="docname">Студия мокапов</span><div class="headActions"><button id="collection">Мои модели</button><button id="open" aria-label="Открыть проект">Открыть<span class="desktopLabel"> проект</span></button><button id="undo" title="Отменить" aria-label="Отменить" hidden>↶</button><button id="redo" title="Повторить" aria-label="Повторить" hidden>↷</button><button class="dark" id="exports" hidden>Экспорт</button></div></header>
 <main id="welcome">
 <div class="intro"><h1>На что наносим?</h1><p>Разместите свой дизайн на 3D-модели или фотографии.</p></div>
@@ -47,8 +47,17 @@
 <div class="sceneWorkspace">
  <div class="sceneStage">
   <canvas id="scenePreview" width="960" height="640" aria-label="Предпросмотр сцены"></canvas>
-  <p class="sceneHint">Выбери изделие на кадре или в списке. Перетаскивание двигает его вдоль поверхности.</p>
-  <div class="sceneTools"><button type="button" id="sceneAuto">Авторасстановка</button><button type="button" id="sceneFit">Вписать в кадр</button></div>
+  <p class="sceneHint">Выбери изделие на кадре или в списке. В режиме «Изделие» перетаскивай модель. В режиме «Камера» потяни за кадр, чтобы сменить ракурс.</p>
+  <div class="sceneTools" aria-label="Управление кадром">
+   <button type="button" id="sceneMoveObject" aria-pressed="true">Изделие</button>
+   <button type="button" id="sceneMoveCamera" aria-pressed="false">Камера</button>
+   <button type="button" id="sceneAuto">Авторасстановка</button><button type="button" id="sceneFit">Вписать в кадр</button></div>
+  <div class="sceneCamera">
+   <label>Поворот камеры <input id="sceneAzimuth" type="range" min="-180" max="180" step="1"></label>
+   <label>Наклон камеры <input id="sceneElevation" type="range" min="10" max="80" step="1"></label>
+   <label>Приближение <input id="sceneCameraZoom" type="range" min="50" max="200" step="1"></label>
+   <button type="button" id="sceneResetCamera">Исходный ракурс</button>
+  </div>
  </div>
  <div class="sceneInspector">
   <div id="sceneObjectList" aria-label="Изделия в сцене"></div>
@@ -64,4 +73,4 @@
 <button class="dark">Сохранить сцену</button><button type="button" id="scenePng">Скачать PNG</button><output id="sceneStatus" aria-live="polite"></output></form>
 </dialog>
 <dialog id="exportDlg"><div class="modalHead"><h2>Экспорт</h2><button data-close aria-label="Закрыть">×</button></div><p id="printSize"></p><label class="materialChoice exportChoice"><input type="checkbox" id="transparentPng">Прозрачный фон PNG</label><button class="dark full" id="png">Скачать PNG · 300 dpi</button><button class="full" id="save">Сохранить проект</button></dialog>
-<input id="photoInput" type="file" hidden accept="image/jpeg,image/png,image/webp"><input id="artInput" type="file" hidden accept="image/svg+xml,image/png,image/jpeg,image/webp" multiple><input id="projectInput" type="file" hidden accept=".maketeka,.json,.zip"><div role="alert" id="message" hidden></div><script type="module" src="/Maketeka-demo/maketeka/app.js?v=sceneGround1"></script></body></html>
+<input id="photoInput" type="file" hidden accept="image/jpeg,image/png,image/webp"><input id="artInput" type="file" hidden accept="image/svg+xml,image/png,image/jpeg,image/webp" multiple><input id="projectInput" type="file" hidden accept=".maketeka,.json,.zip"><div role="alert" id="message" hidden></div><script type="module" src="/Maketeka-demo/maketeka/app.js?v=sceneCamera1"></script></body></html>

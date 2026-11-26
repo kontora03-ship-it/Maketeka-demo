@@ -1,9 +1,22 @@
-export const cameraAngle = .61;
-export const floorSlope = Math.sin(cameraAngle);
-export const verticalScale = Math.cos(cameraAngle);
 const radians = Math.PI / 180;
+export const defaultCamera = {azimuth:0,elevation:35,zoom:100};
 
-export function createScenePose(yaw, tilt, roll, resolution, span) {
+export function sceneCamera({azimuth,elevation}=defaultCamera){
+ const c=Math.cos(azimuth*radians),s=Math.sin(azimuth*radians);
+ const slope=Math.sin(elevation*radians),vertical=Math.cos(elevation*radians);
+ function view(x,y,z){
+  const depth=-s*x+c*z;
+  return [c*x+s*z,y*vertical+depth*slope,depth*vertical-y*slope];
+ }
+ function surfaceDelta(right,down){
+  const depth=down/slope;
+  return [c*right-s*depth,s*right+c*depth];
+ }
+ return {view,surfaceDelta};
+}
+
+export function createScenePose(yaw, tilt, roll, resolution, span, camera=defaultCamera) {
+ const {view:cameraView}=sceneCamera(camera);
  const [cy, sy, ct, st, cr, sr] = [Math.cos(yaw*radians), Math.sin(yaw*radians),
   Math.cos(tilt*radians), Math.sin(tilt*radians), Math.cos(roll*radians), Math.sin(roll*radians)];
  const scale = resolution / (span * 1.65);
@@ -14,10 +27,7 @@ export function createScenePose(yaw, tilt, roll, resolution, span) {
   const rx = cr*x - sr*ty, ry = sr*x + cr*ty;
   return [cy*rx + sy*tz, ry, -sy*rx + cy*tz];
  }
- function view(x, y, z) {
-  const [right, down, depth] = world(x, y, z);
-  return [right, down*verticalScale + depth*floorSlope, depth*verticalScale - down*floorSlope];
- }
+ const view=(x,y,z)=>cameraView(...world(x,y,z));
  return {
   scale, origin, groups, view,
   project: ([x,y]) => [origin+x*scale,origin+y*scale],
@@ -93,13 +103,22 @@ export function arrangeScene(items, geometry) {
  }
 }
 
-export function fitScene(items, geometry) {
- let left=Infinity,right=-Infinity,top=Infinity,bottom=-Infinity;
+export function fitScene(items, geometry, camera=defaultCamera) {
+ const {view,surfaceDelta}=sceneCamera(camera);
+ let left=Infinity,right=-Infinity,top=Infinity,bottom=-Infinity,near=-Infinity,far=Infinity;
  for (const item of items) {
   const b=sceneBounds(item,geometry(item));
-  left=Math.min(left,b.left);right=Math.max(right,b.right+.33*b.top);
-  top=Math.min(top,b.back*floorSlope-b.top*verticalScale);
-  bottom=Math.max(bottom,(b.front+.2*b.top)*floorSlope);
+  for(const x of [b.left,b.right])for(const z of [b.back,b.front]){
+   const [,down,depth]=view(x,0,z);
+   near=Math.max(near,depth);far=Math.min(far,depth);
+   for(const [px,py] of [view(x,-b.top,z),view(x,-b.bottom,z),view(x+.33*b.top,0,z+.2*b.top),view(x,0,z)]){
+    left=Math.min(left,px);right=Math.max(right,px);top=Math.min(top,py);bottom=Math.max(bottom,py);
+   }
+  }
  }
- return {x:(left+right)/2,y:(top+bottom)/2,width:Math.max(160,(right-left)*1.26,(bottom-top)*1.89)};
+ const midX=(left+right)/2,midY=(top+bottom)/2;
+ const targetFloorY=(near+far)/2*Math.tan(camera.elevation*radians);
+ const [x,z]=surfaceDelta(midX,targetFloorY);
+ const [,v]=view(0,1,0);
+ return {target:[x,(midY-targetFloorY)/v,z],width:Math.max(160,(right-left)*1.26,(bottom-top)*1.89)};
 }
