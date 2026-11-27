@@ -8,7 +8,7 @@ import {photoAngle,paintLight} from './light.js?v=layers1';
 import {printPng} from './print.js';
 import {drawMug,mugView,printWidth} from './mug.js?v=sceneGround1';
 import {defaultBody,validBody,cylinder,wrapImage,drawGuides} from './cylinder.js';
-import * as model from './model.js?v=sceneGround1';
+import * as model from './model.js?v=showcaseHiDpi1';
 import {plane,convex,inside,stamp} from './geometry.js?v=logoEdit2';
 const $=id=>document.getElementById(id), canvas=$('canvas'), ctx=canvas.getContext('2d'), clamp=(n,l,h)=>Math.min(h,Math.max(l,n));
 const teeAppearance={cover:'#ffffff',x:.68,y:.305,width:.175};
@@ -953,20 +953,25 @@ const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 let rotating = !reducedMotion.matches;
 const openingAngle = -.36, revolutionMs = 9000, switchMs = 2000, fadeMs = 240;
 const showcasePose = {glossy:true, pitch:-.25, roll:.125};
-// Use the existing notebook shadow as the fixed point on the studio floor.
-const coverLayer = document.createElement('canvas');
-coverLayer.width = preview.width;
-coverLayer.height = preview.height;
-const mugLayer = document.createElement('canvas');
-mugLayer.width = 560;
-mugLayer.height = 396;
+// Keep model framing in the original coordinate system while increasing render density.
+const showcaseWidth=840,showcaseHeight=594;
+const coverLayer=document.createElement('canvas'),mugLayer=document.createElement('canvas');
+function showcaseLayer(layer,width,height,density,physicalCoordinates=false){
+ const w=Math.ceil(width*density),h=Math.ceil(height*density);
+ if(layer.width!==w||layer.height!==h){layer.width=w;layer.height=h}
+ const ctx=layer.getContext('2d');
+ ctx.setTransform(1,0,0,1,0,0);
+ ctx.clearRect(0,0,w,h);
+ if(!physicalCoordinates)ctx.setTransform(density,0,0,density,0,0);
+ ctx.imageSmoothingQuality='high';
+ return ctx;
+}
 const demoMug = {...mugDefaults(), bothSides:true, ...showcasePose, grounded:true, lift:7, zoom:.90, floorZoom:.86, whiteBackdrop:true, transparentBackdrop:true};
 let elapsed = 0, previous = null, animation = 0, displayedModel;
 const demoArt = new Image();
 const finishes = new Map();
-function drawCover(angle, method) {
-  const t = coverLayer.getContext('2d'), w = coverLayer.width, h = 510;
-  t.clearRect(0,0,w,coverLayer.height);
+function drawCover(t,angle,method,density) {
+  const w=showcaseWidth,h=510;
   const options = {yaw:angle,...showcasePose,zoom:.88,cover:'#ffffff',whiteBackdrop:true,transparentBackdrop:true};
   const q = model.drawNotebook(t,w,h,options);
   if (!q) return;
@@ -975,7 +980,7 @@ function drawCover(angle, method) {
   const [a,b,,d] = q;
   t.save();
   t.transform(b[0]-a[0],b[1]-a[1],d[0]-a[0],d[1]-a[1],a[0],a[1]);
-  t.drawImage(notebookInk(mark,{x:.5,y:.5,width,angle:0,method},options,360),(1-width)/2,(1-height)/2,width,height);
+  t.drawImage(notebookInk(mark,{x:.5,y:.5,width,angle:0,method},options,Math.max(360,Math.hypot(b[0]-a[0],b[1]-a[1])*width*density)),(1-width)/2,(1-height)/2,width,height);
   t.restore();
   model.drawNotebookForeground(t,w,h,options);
 }
@@ -1071,6 +1076,7 @@ $('openPreview').onclick=()=>task(()=>{
  return newProject(id==='bottle'?'bag':id,'',id==='bottle'?'bottle':'standard');
 });
 const merchDemoCache=new Map();
+const showcaseAtlasLimit=4;
 // Source center, then the horizontal, upper and lower extents of a full
 // turn in the 840 × 594 source frame. The lower extent includes the shadow.
 // The optional last value measures the object alone for the taller models.
@@ -1088,13 +1094,41 @@ const showcaseFrames={
  rigidBox:[420,297,263,166,206],
  magneticBox:[420,297,271,186,227]
 };
-new ResizeObserver(([{contentRect:{width,height}}])=>{
+function resizeShowcase(){
+ const {width,height}=preview.getBoundingClientRect();
  if(!width||!height)return;
- const pixels=Math.max(1,Math.round(preview.height*width/height));
- if(preview.width===pixels)return;
- preview.width=pixels;
+ // Bound memory on unusually large displays while honoring Retina pixel density.
+ const density=Math.min(window.devicePixelRatio||1,4096/Math.max(width,height),Math.sqrt(10_000_000/(width*height)));
+ const w=Math.max(1,Math.round(width*density)),h=Math.max(1,Math.round(height*density));
+ if(preview.width===w&&preview.height===h)return;
+ preview.width=w;preview.height=h;
  refreshDemo();
-}).observe(preview);
+}
+new ResizeObserver(resizeShowcase).observe(preview);
+function watchShowcaseDensity(){
+ matchMedia('(resolution: '+(window.devicePixelRatio||1)+'dppx)').addEventListener('change',()=>{
+  watchShowcaseDensity();
+  resizeShowcase();
+ },{once:true});
+}
+watchShowcaseDensity();
+
+function showcasePlacement(kind){
+ const [cx,cy,halfWidth,above,below,bodyBelow]=showcaseFrames[kind];
+ const large=largeShowcase.matches;
+ let verticalScale=large
+  ? preview.height*.94/(above+below)
+  : Math.min(preview.height*.45/above,preview.height*.465/below);
+ let centerY=large ? cy+(below-above)/2 : cy;
+ let frameY=preview.height/2;
+ if(bodyBelow){
+  verticalScale=preview.height*.91/(above+bodyBelow);
+  centerY=cy+(bodyBelow-above)/2;
+  frameY=preview.height*.49;
+ }
+ const scale=Math.min(preview.width*.43/halfWidth,verticalScale)*(kind==='pen'?.92:1);
+ return {scale,x:preview.width/2-cx*scale,y:frameY-centerY*scale};
+}
 function drawShowcase() {
   const interval = Math.floor(elapsed / switchMs);
   const angle = openingAngle + (elapsed % revolutionMs) / revolutionMs * 2 * Math.PI;
@@ -1106,24 +1140,29 @@ function drawShowcase() {
   if(visible!==displayedModel)showModelInfo(visible);
   const ctx=preview.getContext('2d');
   ctx.clearRect(0,0,preview.width,preview.height);ctx.save();
+  ctx.imageSmoothingQuality='high';
   const frames=selectedModel?[[current,1]]:[[current,1-blend],[next,blend]];
   for(const [kind,alpha] of frames){
    if(!alpha)continue;
-   let layer=coverLayer;
-   if(kind==='model')drawCover(angle,demoFinish);
-   else if(kind==='mug'){
-    layer=mugLayer;demoMug.yaw=angle;
-    const t=layer.getContext('2d');t.clearRect(0,0,layer.width,layer.height);
-    drawMug(t,layer.width,340,demoMug,finishes.get(demoFinish));
+   const {scale,x,y}=showcasePlacement(kind);
+   const mug=kind==='mug',layer=mug?mugLayer:coverLayer;
+   const density=Math.min(4096/showcaseWidth,Math.max(1,Math.ceil(scale*4)/4));
+   const t=mug
+    ? showcaseLayer(layer,560,396,density*1.5,true)
+    : showcaseLayer(layer,showcaseWidth,showcaseHeight,density);
+   if(kind==='model')drawCover(t,angle,demoFinish,density);
+   else if(mug){
+    demoMug.yaw=angle;
+    drawMug(t,layer.width,Math.round(340*layer.height/396),demoMug,finishes.get(demoFinish));
    }else if(merch[kind]){
-    const t=layer.getContext('2d'),key=kind+demoFinish;
-    t.clearRect(0,0,layer.width,layer.height);
+    const key=kind+demoFinish;
+    const atlasSize=Math.min(2048,Math.max(768,Math.ceil(500*density/256)*256));
     const state=fresh(kind),carton=isCartonMode(kind);
     if(kind==='tee')Object.assign(state,teeAppearance);
     const corrugated=carton&&state.carton.material!=='bookboard';
     if(corrugated)state.carton.material='white';
     if(kind==='magneticBox')state.carton.opening=9;
-    if(!merchDemoCache.has(key)){
+    if((merchDemoCache.get(key)?.size||0)<atlasSize){
      const faces=carton?cartonPrintFaces(state.carton):{front:merch[kind],back:merch[kind]};
      const sample={...state,width:kind==='pen'?.16:kind==='tee'?state.width:.36,bothSides:!carton&&kind!=='tee'};
      const layers=[sample];
@@ -1133,37 +1172,24 @@ function drawShowcase() {
        layers.push({...sample,bagSide:side,width:logoWidth/faces[side].width});
       }
      }
-     merchDemoCache.set(key,merchAtlases(faces,layers,()=>finishes.get(demoFinish),768));
+     if(!merchDemoCache.has(key)&&merchDemoCache.size>=showcaseAtlasLimit)merchDemoCache.delete(merchDemoCache.keys().next().value);
+     merchDemoCache.set(key,{size:atlasSize,atlas:merchAtlases(faces,layers,()=>finishes.get(demoFinish),atlasSize)});
     }
     const pose=carton?{...showcasePose,pitch:-.54,glossy:false}:kind==='tee'?{...showcasePose,pitch:-.19,roll:.01,glossy:false}:showcasePose;
-    drawMerch(t,layer.width,carton||kind==='tee'?layer.height:510,{...state,...pose,yaw:kind==='magneticBox'?angle+.78:angle,transparentBackdrop:true},merchDemoCache.get(key),{fixedOrbit:kind==='magneticBox'});
+    drawMerch(t,showcaseWidth,carton||kind==='tee'?showcaseHeight:510,{...state,...pose,yaw:kind==='magneticBox'?angle+.78:angle,transparentBackdrop:true},merchDemoCache.get(key).atlas,{fixedOrbit:kind==='magneticBox'});
    }else{
-    const t=layer.getContext('2d'),bagFormat=kind==='bottle'?'bottle':'standard';
-    t.clearRect(0,0,layer.width,layer.height);
-    const {front,back,normals,hardware}=drawBag(t,layer.width,510,{...showcasePose,yaw:angle,zoom:.84,cover:'#ffffff',bagFormat,transparentBackdrop:true});
+    const bagFormat=kind==='bottle'?'bottle':'standard';
+    const {front,back,normals,hardware}=drawBag(t,showcaseWidth,510,{...showcasePose,yaw:angle,zoom:.84,cover:'#ffffff',bagFormat,transparentBackdrop:true});
     const mark=finishes.get(demoFinish),fmt=bagFormats[bagFormat];
     const face=front||back,projection=face&&plane(face);
     if(projection&&mark){
      const quad=graphicQuad(projection,{x:.5,y:.5,width:.36,angle:0},mark,fmt.width/fmt.height);
-     stamp(t,bagInk(mark,face,quad,front?normals.front:normals.back,showcasePose,320),quad);
+     stamp(t,bagInk(mark,face,quad,front?normals.front:normals.back,showcasePose,Math.round(320*density)),quad);
     }
     hardware();
    }
    ctx.globalAlpha=alpha;ctx.globalCompositeOperation=!selectedModel&&kind===next?'lighter':'source-over';
-   const [cx,cy,halfWidth,above,below,bodyBelow]=showcaseFrames[kind];
-   const large=largeShowcase.matches;
-   let verticalScale=large
-    ? preview.height*.94/(above+below)
-    : Math.min(preview.height*.45/above,preview.height*.465/below);
-   let centerY=large ? cy+(below-above)/2 : cy;
-   let frameY=preview.height/2;
-   if(bodyBelow){
-    verticalScale=preview.height*.91/(above+bodyBelow);
-    centerY=cy+(bodyBelow-above)/2;
-    frameY=preview.height*.49;
-   }
-   const scale=Math.min(preview.width*.43/halfWidth,verticalScale)*(kind==='pen'?.92:1);
-   ctx.drawImage(layer,preview.width/2-cx*scale,frameY-centerY*scale,coverLayer.width*scale,coverLayer.height*scale);
+   ctx.drawImage(layer,x,y,showcaseWidth*scale,showcaseHeight*scale);
   }
   ctx.restore();
 }
@@ -1187,7 +1213,7 @@ function refreshDemo() {
   if (rotating) animation=requestAnimationFrame(tick);
 }
 demoArt.onload=()=>{
-  for(const method of ['print','gold','silver']) finishes.set(method,graphicBitmap(demoArt,{method}));
+  for(const method of ['print','gold','silver']) finishes.set(method,graphicBitmap(demoArt,{method},2400));
   refreshDemo();
 };
 demoArt.src=brandUrl;

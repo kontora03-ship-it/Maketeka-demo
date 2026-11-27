@@ -56,24 +56,27 @@ function leatherGrain() {
   }
   ctx.putImageData(pixels,0,0); grain=tile; return tile;
 }
-function coverSurface(hex,glossy) {
-  const key=hex+(glossy?'-gloss':'-matte');
+function coverSurface(hex,glossy,projectedWidth) {
+  const density=Math.min(3,Math.max(1,Math.ceil(projectedWidth/650)));
+  const key=[hex,glossy,density].join('/');
   if(surfaceCache.has(key)) return surfaceCache.get(key);
   const tex=document.createElement('canvas');
-  tex.width=650; tex.height=Math.round(tex.width*H/W);
+  const width=650,height=Math.round(width*H/W);
+  tex.width=width*density;tex.height=height*density;
   const ctx=tex.getContext('2d'), c=rgb(hex), luma=(c[0]+c[1]+c[2])/765;
-  ctx.fillStyle=tint(c,.98,2);ctx.fillRect(0,0,tex.width,tex.height);
+  ctx.scale(density,density);
+  ctx.fillStyle=tint(c,.98,2);ctx.fillRect(0,0,width,height);
   ctx.globalAlpha=glossy?.07:.13+luma*.06;ctx.globalCompositeOperation='hard-light';
-  ctx.fillStyle=ctx.createPattern(leatherGrain(),'repeat');ctx.fillRect(0,0,tex.width,tex.height);
+  ctx.fillStyle=ctx.createPattern(leatherGrain(),'repeat');ctx.fillRect(0,0,width,height);
   ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
   // A hinge crease follows the bound edge; the hairline and the stitches
   // deliberately remain subtle at normal viewing size.
   const crease=ctx.createLinearGradient(23,0,40,0);
   crease.addColorStop(0,'rgba(0,0,0,0)');crease.addColorStop(.37,'rgba(0,0,0,.075)');
   crease.addColorStop(.54,'rgba(255,255,255,.12)');crease.addColorStop(1,'rgba(255,255,255,0)');
-  ctx.fillStyle=crease;ctx.fillRect(23,2,17,tex.height-4);
+  ctx.fillStyle=crease;ctx.fillRect(23,2,17,height-4);
   ctx.lineWidth=1.35;ctx.strokeStyle='rgba(0,0,0,.12)';ctx.setLineDash([4,3.6]);
-  ctx.beginPath();ctx.roundRect(9.5,9.5,tex.width-19,tex.height-19,19);ctx.stroke();
+  ctx.beginPath();ctx.roundRect(9.5,9.5,width-19,height-19,19);ctx.stroke();
   if(surfaceCache.size>3) surfaceCache.delete(surfaceCache.keys().next().value);
   surfaceCache.set(key,tex); return tex;
 }
@@ -226,7 +229,7 @@ export function drawNotebook(ctx,width,height,options={}) {
   paintBackdrop(ctx,width,height,options);
   if(options.scenePose)options.scenePose.record(shadowParts);
   else notebookShadow(ctx,width,height,s,options.background);
-  const texture=coverSurface(color,options.glossy);
+  const texture=coverSurface(color,options.glossy,scale*W*Math.hypot(ctx.getTransform().a,ctx.getTransform().b));
   function casing(side) {
     const z=side*DEPTH/2, zin=side*(DEPTH/2-1.55);
     sideFaces(ctx,s,caseOutline,Math.min(z,zin),Math.max(z,zin),c);
